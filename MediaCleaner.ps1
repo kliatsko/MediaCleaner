@@ -1,4 +1,4 @@
-﻿#Last Updated By: Nick Kliatsko
+﻿#Created By: Nick Kliatsko
 #Last Updated: 12/24/2023
 
 #movies or shows
