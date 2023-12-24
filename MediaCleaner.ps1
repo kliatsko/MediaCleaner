@@ -1,9 +1,5 @@
-﻿##Torrent_Cleaner.ps1
-#12/24/2023
-
-<# NOTES
-This script assumes that you have 7-Zip (https://www.7-zip.org/download.html) installed and configured correctly to work in PowerShell.
-#>
+﻿#Last Updated By: Nick Kliatsko
+#Last Updated: 12/24/2023
 
 #movies or shows
 $type = read-host "1=Movies 2=Shows"
