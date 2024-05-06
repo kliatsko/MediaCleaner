@@ -8,7 +8,27 @@ $type = read-host "1=Movies 2=Shows"
 if ($type -eq 1){
     $path = "G:\Rents\_Movies\"
     Write-host "Movie Routine"
+    
+    #test for 7-zip install
     if (Test-path -Path "C:\Program Files\7-Zip") {write-host "7-Zip installed" -ForegroundColor Green}
+
+    #clean unnecessary files
+    Get-ChildItem -path $path -Filter *Subs* -Recurse | Remove-Item -Recurse
+    Get-ChildItem -path $path -Filter *Sample* -Recurse | Remove-Item -Recurse
+    Get-ChildItem -path $path -Filter *Trailer* -Recurse | Remove-Item -Recurse
+    Get-ChildItem -path $path -Filter *Proof* -Recurse | Remove-Item -Recurse
+    Get-ChildItem -path $path -Filter *Screens* -Recurse | Remove-Item -Recurse
+
+    #dump remaining video files to root (fixes issues with folders in folders
+    $videoFiles = Get-ChildItem -Path $path -Recurse -File | Where-Object { $_.Extension -match '\.(mp4|mkv|avi|mov|wmv)$' }
+
+    # Copy each video file to the root directory
+    foreach ($file in $videoFiles) {
+        $destinationPath = Join-Path -Path $path -ChildPath $file.Name
+        Move-Item -Path $file.FullName -Destination $destinationPath -Force
+        Write-Host "Copied $($file.Name) to $($destinationPath)"
+        }
+    
     #unzip archives to root
     set-alias sz "$env:ProgramFiles\7-Zip\7z.exe"
     $unzipQueue = Get-ChildItem -Path $path -Filter *.rar -Recurse
@@ -34,7 +54,8 @@ if ($type -eq 1){
         $newpath = $path+$dir
         Move-Item -path $file.PSPath -destination $newpath
     }
-    # Loop through each subfolder
+    ### This one is commented out
+    <# Loop through each subfolder
     $movieFolders = Get-ChildItem -Path $path -Directory
     foreach ($folder in $movieFolders) {
         $subfolder = Get-ChildItem -Path $folder -Directory
@@ -53,7 +74,7 @@ if ($type -eq 1){
             }
         }
     }
-
+#>
     #cleans tags out of folder titles
     Get-ChildItem -path $path -Filter *1080p* |Rename-Item -NewName { $($_.Name -split '1080p')[0] }
     Get-ChildItem -path $path -Filter *2160p* |Rename-Item -NewName { $($_.Name -split '2160p')[0] }
@@ -84,16 +105,9 @@ if ($type -eq 1){
     Get-ChildItem -path $path -Filter *REPACK* |Rename-Item -NewName { $($_.Name -split 'REPACK')[0] }
     Get-ChildItem -path $path -Filter *"Anniversary Edition"* |Rename-Item -NewName { $($_.Name -split 'Anniversary Edition')[0] }
     Get-ChildItem -path $path -Filter *"Restored"* |Rename-Item -NewName { $($_.Name -split 'Restored')[0] }
-    Get-ChildItem -path $path -Filter *.* | Rename-Item -NewName {$_.name -replace '[.]',' ' }
+    #Get-ChildItem -path $path -Filter *.* | Rename-Item -NewName {$_.name -replace '[.]',' ' }
     Get-ChildItem -Path $path -filter "* 20??" | Rename-Item -newname { $_ -replace '(.*)(\d{4})', '$1($2)'}
     Get-ChildItem -Path $path -filter "* 19??" | Rename-Item -newname { $_ -replace '(.*)(\d{4})', '$1($2)'}
-
-    #cleans unnecessary files
-    Get-ChildItem -path $path -Filter *Subs* -Recurse | Remove-Item -Recurse
-    Get-ChildItem -path $path -Filter *Sample* -Recurse | Remove-Item -Recurse
-    Get-ChildItem -path $path -Filter *Trailer* -Recurse | Remove-Item -Recurse
-    Get-ChildItem -path $path -Filter *Proof* -Recurse | Remove-Item -Recurse
-    Get-ChildItem -path $path -Filter *Screens* -Recurse | Remove-Item -Recurse
 }
 
 #Movie Tools
