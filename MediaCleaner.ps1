@@ -1,5 +1,5 @@
 ﻿#Created By: Nick Kliatsko
-#Last Updated: 12/24/2023
+#Last Updated: 5/6/2024
 
 #movies or shows
 $type = read-host "1=Movies 2=Shows"
@@ -19,16 +19,19 @@ if ($type -eq 1){
     Get-ChildItem -path $path -Filter *Proof* -Recurse | Remove-Item -Recurse
     Get-ChildItem -path $path -Filter *Screens* -Recurse | Remove-Item -Recurse
 
-    #dump remaining video files to root (fixes issues with folders in folders
-    $videoFiles = Get-ChildItem -Path $path -Recurse -File | Where-Object { $_.Extension -match '\.(mp4|mkv|avi|mov|wmv)$' }
+    #dump remaining video files to root (fixes issues with folders in folders)
+    #not needed anymore?
+    #$videoFiles = Get-ChildItem -Path $path -Recurse -File | Where-Object { $_.Extension -match '\.(mp4|mkv|avi|mov|wmv)$' }
 
     # Copy each video file to the root directory
+    <#
     foreach ($file in $videoFiles) {
         $destinationPath = Join-Path -Path $path -ChildPath $file.Name
         Move-Item -Path $file.FullName -Destination $destinationPath -Force
         Write-Host "Copied $($file.Name) to $($destinationPath)"
         }
-    
+    #>
+
     #unzip archives to root
     set-alias sz "$env:ProgramFiles\7-Zip\7z.exe"
     $unzipQueue = Get-ChildItem -Path $path -Filter *.rar -Recurse
@@ -54,7 +57,7 @@ if ($type -eq 1){
         $newpath = $path+$dir
         Move-Item -path $file.PSPath -destination $newpath
     }
-    ### This one is commented out
+    ### This one below is commented out
     <# Loop through each subfolder
     $movieFolders = Get-ChildItem -Path $path -Directory
     foreach ($folder in $movieFolders) {
@@ -82,6 +85,7 @@ if ($type -eq 1){
     Get-ChildItem -path $path -Filter *HDRip* |Rename-Item -NewName { $($_.Name -split 'HDRip')[0] }
     Get-ChildItem -path $path -Filter *DVDRip* |Rename-Item -NewName { $($_.Name -split 'DVDRip')[0] }
     Get-ChildItem -path $path -Filter *BRRip* |Rename-Item -NewName { $($_.Name -split 'BRRip')[0] }
+    Get-ChildItem -path $path -Filter *BR-Rip* |Rename-Item -NewName { $($_.Name -split 'BR-Rip')[0] }
     Get-ChildItem -path $path -Filter *BDRip* |Rename-Item -NewName { $($_.Name -split 'BDRip')[0] }
     Get-ChildItem -path $path -Filter *Extended* |Rename-Item -NewName { $($_.Name -split 'Extended')[0] }
     Get-ChildItem -path $path -Filter *Unrated* |Rename-Item -NewName { $($_.Name -split 'Unrated')[0] }
@@ -105,7 +109,7 @@ if ($type -eq 1){
     Get-ChildItem -path $path -Filter *REPACK* |Rename-Item -NewName { $($_.Name -split 'REPACK')[0] }
     Get-ChildItem -path $path -Filter *"Anniversary Edition"* |Rename-Item -NewName { $($_.Name -split 'Anniversary Edition')[0] }
     Get-ChildItem -path $path -Filter *"Restored"* |Rename-Item -NewName { $($_.Name -split 'Restored')[0] }
-    #Get-ChildItem -path $path -Filter *.* | Rename-Item -NewName {$_.name -replace '[.]',' ' }
+    Get-ChildItem -path $path -Filter *.* | Rename-Item -NewName {$_.name -replace '[.]',' ' }
     Get-ChildItem -Path $path -filter "* 20??" | Rename-Item -newname { $_ -replace '(.*)(\d{4})', '$1($2)'}
     Get-ChildItem -Path $path -filter "* 19??" | Rename-Item -newname { $_ -replace '(.*)(\d{4})', '$1($2)'}
 }
