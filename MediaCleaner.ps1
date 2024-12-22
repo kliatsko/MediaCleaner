@@ -1,5 +1,5 @@
 ﻿#Created By: Nick Kliatsko
-#Last Updated: 9/3/2024x
+#Last Updated: 12/22/2024
 
 #movies or shows
 $type = read-host "1=Movies 2=Shows"
@@ -19,12 +19,9 @@ if ($type -eq 1){
     Get-ChildItem -path $path -Filter *Proof* -Recurse | Remove-Item -Recurse
     Get-ChildItem -path $path -Filter *Screens* -Recurse | Remove-Item -Recurse
 
-    #dump remaining video files to root (fixes issues with folders in folders)
-    #not needed anymore?
-    #$videoFiles = Get-ChildItem -Path $path -Recurse -File | Where-Object { $_.Extension -match '\.(mp4|mkv|avi|mov|wmv)$' }
-
-    # Copy each video file to the root directory
+    #Copy all video files to root (troubleshooting)
     <#
+    $videoFiles = Get-ChildItem -Path $path -Recurse -File | Where-Object { $_.Extension -match '\.(mp4|mkv|avi|mov|wmv)$' }
     foreach ($file in $videoFiles) {
         $destinationPath = Join-Path -Path $path -ChildPath $file.Name
         Move-Item -Path $file.FullName -Destination $destinationPath -Force
@@ -57,6 +54,7 @@ if ($type -eq 1){
         $newpath = $path+$dir
         Move-Item -path $file.PSPath -destination $newpath
     }
+    
     ### This one below is commented out
     <# Loop through each subfolder
     $movieFolders = Get-ChildItem -Path $path -Directory
@@ -107,6 +105,8 @@ if ($type -eq 1){
     Get-ChildItem -path $path -Filter *BD-Rip* |Rename-Item -NewName { $($_.Name -split 'BD-Rip')[0] }
     Get-ChildItem -path $path -Filter *hevc-d3g* |Rename-Item -NewName { $($_.Name -split 'hevc-d3g')[0] }
     Get-ChildItem -path $path -Filter *REPACK* |Rename-Item -NewName { $($_.Name -split 'REPACK')[0] }
+    Get-ChildItem -path $path -Filter *1080-hd4u* |Rename-Item -NewName { $($_.Name -split '1080-hd4u')[0] }
+    Get-ChildItem -path $path -Filter *ExtCut* |Rename-Item -NewName { $($_.Name -split 'ExtCut')[0] }
     Get-ChildItem -path $path -Filter *"Anniversary Edition"* |Rename-Item -NewName { $($_.Name -split 'Anniversary Edition')[0] }
     Get-ChildItem -path $path -Filter *"Restored"* |Rename-Item -NewName { $($_.Name -split 'Restored')[0] }
     Get-ChildItem -path $path -Filter *.* | Rename-Item -NewName {$_.name -replace '[.]',' ' }
@@ -115,12 +115,13 @@ if ($type -eq 1){
 }
 
 #Movie Tools
-    # Check the number of subfolders
+    <# Check the number of subfolders
     if ($subfolders.Count -gt 3) {
         Write-Host "There are more than three subfolders in $folderPath."
     } else {
         Write-Host "There are three or fewer subfolders in $folderPath."
     }
+    #>
 
 #show tasks
 elseif ($type -eq 2){
