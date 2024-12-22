@@ -1,16 +1,42 @@
 ﻿#Created By: Nick Kliatsko
 #Last Updated: 12/22/2024
 
+#This script is designed to clean up media files in a directory. It will move all video files to the root directory, unzip any archives, and delete any unnecessary files. It will also clean up the folder names by removing any tags that are present.
+#The script will also check for the presence of 7-Zip and will install it if it is not present.
+#Requirements: Windows 10, Powershell 5.1, 7-Zip
+#Run the script in the directory you want to clean up.
+
+#General SEtup
+Add-Type -AssemblyName System.Windows.Forms
+
+function Select-FolderDialog {
+    $folderBrowser = New-Object System.Windows.Forms.FolderBrowserDialog
+    $folderBrowser.Description = "Select the folder to clean up"
+    $folderBrowser.ShowNewFolderButton = $true
+
+    if ($folderBrowser.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+        return $folderBrowser.SelectedPath
+    } else {
+        Write-Host "No folder selected" -ForegroundColor Red
+        exit
+    }
+}
+
 #movies or shows
 $type = read-host "1=Movies 2=Shows"
 
 #movie tasks
 if ($type -eq 1){
-    $path = "G:\Rents\_Movies\"
+    $path = Select-FolderDialog
     Write-host "Movie Routine"
     
     #test for 7-zip install
     if (Test-path -Path "C:\Program Files\7-Zip") {write-host "7-Zip installed" -ForegroundColor Green}
+    else {write-host "7-Zip not installed" -ForegroundColor Red
+        $7zip = "https://www.7-zip.org/a/7z1900-x64.exe"
+        Start-Process -FilePath $7zip
+        write-host "7-Zip installed" -ForegroundColor Green
+    }
 
     #clean unnecessary files
     Get-ChildItem -path $path -Filter *Subs* -Recurse | Remove-Item -Recurse
@@ -18,16 +44,6 @@ if ($type -eq 1){
     Get-ChildItem -path $path -Filter *Trailer* -Recurse | Remove-Item -Recurse
     Get-ChildItem -path $path -Filter *Proof* -Recurse | Remove-Item -Recurse
     Get-ChildItem -path $path -Filter *Screens* -Recurse | Remove-Item -Recurse
-
-    #Copy all video files to root (troubleshooting)
-    <#
-    $videoFiles = Get-ChildItem -Path $path -Recurse -File | Where-Object { $_.Extension -match '\.(mp4|mkv|avi|mov|wmv)$' }
-    foreach ($file in $videoFiles) {
-        $destinationPath = Join-Path -Path $path -ChildPath $file.Name
-        Move-Item -Path $file.FullName -Destination $destinationPath -Force
-        Write-Host "Copied $($file.Name) to $($destinationPath)"
-        }
-    #>
 
     #unzip archives to root
     set-alias sz "$env:ProgramFiles\7-Zip\7z.exe"
@@ -54,28 +70,7 @@ if ($type -eq 1){
         $newpath = $path+$dir
         Move-Item -path $file.PSPath -destination $newpath
     }
-    
-    ### This one below is commented out
-    <# Loop through each subfolder
-    $movieFolders = Get-ChildItem -Path $path -Directory
-    foreach ($folder in $movieFolders) {
-        $subfolder = Get-ChildItem -Path $folder -Directory
-        # Get all files and folders inside the subfolder
-        $items = Get-ChildItem -Path $subFolder.FullName -Force -Recurse
-        # If there are no items, delete the subfolder
-        if ($items.Count -eq 0) {
-            Write-host "This folder is empty"
-            Remove-Item -Path $subFolder.FullName -Force
-        }
-        # If there are items, delete them and then delete the subfolder
-        else {
-            Foreach ($file in $items){
-                Move-Item -Path $file.FullName -Destination $folder -Force
-                Remove-Item -Path $subFolder.FullName -Recurse -Force
-            }
-        }
-    }
-#>
+
     #cleans tags out of folder titles
     Get-ChildItem -path $path -Filter *1080p* |Rename-Item -NewName { $($_.Name -split '1080p')[0] }
     Get-ChildItem -path $path -Filter *2160p* |Rename-Item -NewName { $($_.Name -split '2160p')[0] }
@@ -123,9 +118,42 @@ if ($type -eq 1){
     }
     #>
 
+    #Copy all video files to root (troubleshooting)
+    <#
+    $videoFiles = Get-ChildItem -Path $path -Recurse -File | Where-Object { $_.Extension -match '\.(mp4|mkv|avi|mov|wmv)$' }
+    foreach ($file in $videoFiles) {
+        $destinationPath = Join-Path -Path $path -ChildPath $file.Name
+        Move-Item -Path $file.FullName -Destination $destinationPath -Force
+        Write-Host "Copied $($file.Name) to $($destinationPath)"
+        }
+    #>
+
+    
+    #Cleans up Empty Folders
+    <#
+    $movieFolders = Get-ChildItem -Path $path -Directory
+    foreach ($folder in $movieFolders) {
+        $subfolder = Get-ChildItem -Path $folder -Directory
+        # Get all files and folders inside the subfolder
+        $items = Get-ChildItem -Path $subFolder.FullName -Force -Recurse
+        # If there are no items, delete the subfolder
+        if ($items.Count -eq 0) {
+            Write-host "This folder is empty"
+            Remove-Item -Path $subFolder.FullName -Force
+        }
+        # If there are items, delete them and then delete the subfolder
+        else {
+            Foreach ($file in $items){
+                Move-Item -Path $file.FullName -Destination $folder -Force
+                Remove-Item -Path $subFolder.FullName -Recurse -Force
+            }
+        }
+    } 
+    #>
+
 #show tasks
 elseif ($type -eq 2){
-    $path = "G:\Rents\_Shows\"
+    $path = Select-FolderDialog
     Write-host "Show Routine"
     $FileType= @("*.*mp4", "*.*mkv")
     #dump loose video files to root
