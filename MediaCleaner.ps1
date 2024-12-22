@@ -1,5 +1,5 @@
 ﻿#Created By: Nick Kliatsko
-#Last Updated: 9/3/2024
+#Last Updated: 9/3/2024x
 
 #movies or shows
 $type = read-host "1=Movies 2=Shows"
