@@ -130,6 +130,7 @@ $script:DefaultConfig = @{
     DryRun = $false
     SevenZipPath = "C:\Program Files\7-Zip\7z.exe"
     MediaInfoPath = "C:\Program Files\MediaInfo\MediaInfo.exe"
+    FFmpegPath = "C:\Program Files\ffmpeg\bin\ffmpeg.exe"
     VideoExtensions = @('.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.m4v')
     SubtitleExtensions = @('.srt', '.sub', '.idx', '.ass', '.ssa', '.vtt')
     ArchiveExtensions = @('*.rar', '*.zip', '*.7z', '*.tar', '*.gz', '*.bz2')
@@ -619,6 +620,47 @@ function Test-MediaInfoInstallation {
 
 <#
 .SYNOPSIS
+    Checks if FFmpeg is installed and available
+.OUTPUTS
+    Boolean indicating if FFmpeg is available
+#>
+function Test-FFmpegInstallation {
+    if (Test-Path $script:Config.FFmpegPath) {
+        Write-Verbose-Message "FFmpeg found at: $($script:Config.FFmpegPath)"
+        return $true
+    }
+
+    # Try to find in PATH
+    $ffmpegInPath = Get-Command "ffmpeg" -ErrorAction SilentlyContinue
+    if ($ffmpegInPath) {
+        $script:Config.FFmpegPath = $ffmpegInPath.Source
+        Write-Verbose-Message "FFmpeg found in PATH: $($script:Config.FFmpegPath)"
+        return $true
+    }
+
+    # Check common installation locations
+    $commonPaths = @(
+        "C:\ffmpeg\bin\ffmpeg.exe",
+        "C:\Program Files\ffmpeg\bin\ffmpeg.exe",
+        "C:\Program Files (x86)\ffmpeg\bin\ffmpeg.exe",
+        "$env:USERPROFILE\ffmpeg\bin\ffmpeg.exe",
+        "$env:LOCALAPPDATA\ffmpeg\bin\ffmpeg.exe"
+    )
+
+    foreach ($path in $commonPaths) {
+        if (Test-Path $path) {
+            $script:Config.FFmpegPath = $path
+            Write-Verbose-Message "FFmpeg found at: $path"
+            return $true
+        }
+    }
+
+    Write-Verbose-Message "FFmpeg not found"
+    return $false
+}
+
+<#
+.SYNOPSIS
     Gets detailed video information using MediaInfo CLI
 .PARAMETER FilePath
     Path to the video file
@@ -694,6 +736,85 @@ function Get-MediaInfoDetails {
     }
     catch {
         Write-Verbose-Message "Error getting MediaInfo: $_" "Yellow"
+        return $null
+    }
+}
+
+<#
+.SYNOPSIS
+    Gets detailed HDR format information using MediaInfo CLI
+.PARAMETER FilePath
+    Path to the video file
+.OUTPUTS
+    Hashtable with HDR format details (Format, Profile, Compatibility)
+.DESCRIPTION
+    Extracts detailed HDR metadata including Dolby Vision profile,
+    HDR10+ dynamic metadata, HLG, and compatibility layers
+#>
+function Get-MediaInfoHDRFormat {
+    param(
+        [string]$FilePath
+    )
+
+    if (-not (Test-MediaInfoInstallation)) {
+        return $null
+    }
+
+    try {
+        $hdrFormat = & $script:Config.MediaInfoPath --Inform="Video;%HDR_Format%" "$FilePath" 2>$null
+        $hdrFormatCompat = & $script:Config.MediaInfoPath --Inform="Video;%HDR_Format_Compatibility%" "$FilePath" 2>$null
+        $hdrFormatProfile = & $script:Config.MediaInfoPath --Inform="Video;%HDR_Format_Profile%" "$FilePath" 2>$null
+        $colorPrimaries = & $script:Config.MediaInfoPath --Inform="Video;%colour_primaries%" "$FilePath" 2>$null
+        $transferChar = & $script:Config.MediaInfoPath --Inform="Video;%transfer_characteristics%" "$FilePath" 2>$null
+
+        $result = @{
+            Format = $null
+            Profile = $null
+            Compatibility = $null
+            ColorPrimaries = $null
+            TransferCharacteristics = $null
+        }
+
+        if ($hdrFormat) { $result.Format = $hdrFormat.Trim() }
+        if ($hdrFormatProfile) { $result.Profile = $hdrFormatProfile.Trim() }
+        if ($hdrFormatCompat) { $result.Compatibility = $hdrFormatCompat.Trim() }
+        if ($colorPrimaries) { $result.ColorPrimaries = $colorPrimaries.Trim() }
+        if ($transferChar) { $result.TransferCharacteristics = $transferChar.Trim() }
+
+        # Normalize HDR format names
+        if ($result.Format) {
+            if ($result.Format -match 'Dolby Vision|DOVI') {
+                $result.Format = "Dolby Vision"
+            }
+            elseif ($result.Format -match 'HDR10\+|SMPTE ST 2094') {
+                $result.Format = "HDR10+"
+            }
+            elseif ($result.Format -match 'SMPTE ST 2086|HDR10') {
+                $result.Format = "HDR10"
+            }
+            elseif ($result.Format -match 'HLG|ARIB STD-B67') {
+                $result.Format = "HLG"
+            }
+        }
+        # Detect HDR from transfer characteristics if HDR_Format not present
+        elseif ($transferChar -match 'PQ|SMPTE ST 2084') {
+            $result.Format = "HDR10"
+        }
+        elseif ($transferChar -match 'HLG') {
+            $result.Format = "HLG"
+        }
+        # Check for BT.2020 color space (wide color gamut, often indicates HDR)
+        elseif ($colorPrimaries -match 'BT\.2020') {
+            $result.Format = "HDR"
+        }
+
+        if ($result.Format) {
+            return $result
+        }
+        return $null
+    }
+    catch {
+        Write-Verbose-Message "Error getting HDR format: $_" "Yellow"
         return $null
     }
 }
@@ -802,7 +923,7 @@ function Find-DuplicateMoviesEnhanced {
             if (-not $videoFile) { continue }
 
             $titleInfo = Get-NormalizedTitle -Name $folder.Name
-            $quality = Get-QualityScore -FileName $folder.Name
+            $quality = Get-QualityScore -FileName $folder.Name -FilePath $videoFile.FullName
 
             # Calculate partial hash for exact duplicate detection
             $fileHash = Get-FilePartialHash -FilePath $videoFile.FullName
@@ -986,10 +1107,7 @@ function Export-LibraryToCSV {
                 if (-not $videoFile) { continue }
 
                 $titleInfo = Get-NormalizedTitle -Name $folder.Name
-                $quality = Get-QualityScore -FileName $folder.Name
-
-                # Try to get MediaInfo details
-                $mediaInfo = Get-MediaInfoDetails -FilePath $videoFile.FullName
+                $quality = Get-QualityScore -FileName $folder.Name -FilePath $videoFile.FullName
 
                 $items += [PSCustomObject]@{
                     Title = $titleInfo.NormalizedTitle
@@ -997,14 +1115,17 @@ function Export-LibraryToCSV {
                     FolderName = $folder.Name
                     FileName = $videoFile.Name
                     FileSizeMB = [math]::Round($videoFile.Length / 1MB, 2)
-                    Resolution = if ($mediaInfo) { $mediaInfo.Resolution } else { $quality.Resolution }
-                    VideoCodec = if ($mediaInfo) { $mediaInfo.VideoCodec } else { $quality.Codec }
-                    AudioCodec = if ($mediaInfo) { $mediaInfo.AudioCodec } else { $quality.Audio }
+                    Resolution = $quality.Resolution
+                    VideoCodec = $quality.Codec
+                    AudioCodec = $quality.Audio
                     Source = $quality.Source
                     QualityScore = $quality.Score
-                    HDR = if ($mediaInfo) { $mediaInfo.HDR } else { $quality.HDR }
+                    HDR = $quality.HDR
+                    HDRFormat = $quality.HDRFormat
+                    Bitrate = if ($quality.Bitrate -gt 0) { [math]::Round($quality.Bitrate / 1000000, 1) } else { $null }
                     Container = $videoFile.Extension.TrimStart('.')
                     Path = $folder.FullName
+                    DataSource = $quality.DataSource
                 }
             }
         }
@@ -1015,7 +1136,7 @@ function Export-LibraryToCSV {
 
             foreach ($file in $videoFiles) {
                 $epInfo = Get-EpisodeInfo -FileName $file.Name
-                $quality = Get-QualityScore -FileName $file.Name
+                $quality = Get-QualityScore -FileName $file.Name -FilePath $file.FullName
 
                 $items += [PSCustomObject]@{
                     ShowTitle = $epInfo.ShowTitle
@@ -1028,8 +1149,12 @@ function Export-LibraryToCSV {
                     VideoCodec = $quality.Codec
                     AudioCodec = $quality.Audio
                     QualityScore = $quality.Score
+                    HDR = $quality.HDR
+                    HDRFormat = $quality.HDRFormat
+                    Bitrate = if ($quality.Bitrate -gt 0) { [math]::Round($quality.Bitrate / 1000000, 1) } else { $null }
                     Container = $file.Extension.TrimStart('.')
                     Path = $file.FullName
+                    DataSource = $quality.DataSource
                 }
             }
         }
@@ -1098,30 +1223,28 @@ function Export-LibraryToHTML {
                 if (-not $videoFile) { continue }
 
                 $titleInfo = Get-NormalizedTitle -Name $folder.Name
-                $quality = Get-QualityScore -FileName $folder.Name
-                $mediaInfo = Get-MediaInfoDetails -FilePath $videoFile.FullName
-
-                $resolution = if ($mediaInfo) { $mediaInfo.Resolution } else { $quality.Resolution }
-                $codec = if ($mediaInfo) { $mediaInfo.VideoCodec } else { $quality.Codec }
+                $quality = Get-QualityScore -FileName $folder.Name -FilePath $videoFile.FullName
 
                 $items += @{
                     Title = $titleInfo.NormalizedTitle
                     Year = $titleInfo.Year
-                    Resolution = $resolution
-                    Codec = $codec
+                    Resolution = $quality.Resolution
+                    Codec = $quality.Codec
                     Size = $videoFile.Length
                     Score = $quality.Score
+                    HDR = $quality.HDR
+                    HDRFormat = $quality.HDRFormat
                 }
 
                 # Update stats
                 $stats.TotalItems++
                 $stats.TotalSizeGB += $videoFile.Length / 1GB
 
-                if (-not $stats.ByResolution.ContainsKey($resolution)) { $stats.ByResolution[$resolution] = 0 }
-                $stats.ByResolution[$resolution]++
+                if (-not $stats.ByResolution.ContainsKey($quality.Resolution)) { $stats.ByResolution[$quality.Resolution] = 0 }
+                $stats.ByResolution[$quality.Resolution]++
 
-                if (-not $stats.ByCodec.ContainsKey($codec)) { $stats.ByCodec[$codec] = 0 }
-                $stats.ByCodec[$codec]++
+                if (-not $stats.ByCodec.ContainsKey($quality.Codec)) { $stats.ByCodec[$quality.Codec] = 0 }
+                $stats.ByCodec[$quality.Codec]++
 
                 if ($titleInfo.Year) {
                     if (-not $stats.ByYear.ContainsKey($titleInfo.Year)) { $stats.ByYear[$titleInfo.Year] = 0 }
@@ -1358,7 +1481,7 @@ function Export-LibraryToJSON {
                 if (-not $videoFile) { continue }
 
                 $titleInfo = Get-NormalizedTitle -Name $folder.Name
-                $quality = Get-QualityScore -FileName $folder.Name
+                $quality = Get-QualityScore -FileName $folder.Name -FilePath $videoFile.FullName
 
                 $library.Items += @{
                     Title = $titleInfo.NormalizedTitle
@@ -1429,8 +1552,8 @@ function Select-FolderDialog {
     param(
         [string]$Description = "Select the folder to clean up"
     )
+    Write-Host "Opening folder dialog... (check taskbar if it doesn't appear)" -ForegroundColor Yellow
     Write-Verbose-Message "Opening folder browser dialog..."
-    Write-Verbose-Message "If frozen, check taskbar for hidden dialog window!" "Yellow"
     $folderBrowser = New-Object System.Windows.Forms.FolderBrowserDialog
     $folderBrowser.Description = $Description
     $folderBrowser.ShowNewFolderButton = $true
@@ -2267,7 +2390,8 @@ function Show-NFOMetadata {
 #>
 function Get-QualityScore {
     param(
-        [string]$FileName
+        [string]$FileName,
+        [string]$FilePath = $null
     )
 
     $quality = @{
@@ -2277,9 +2401,271 @@ function Get-QualityScore {
         Source = "Unknown"
         Audio = "Unknown"
         HDR = $false
+        HDRFormat = $null
+        Bitrate = 0
+        Width = 0
+        Height = 0
+        AudioChannels = 0
         Details = @()
+        DataSource = "Filename"
     }
 
+    # Try MediaInfo first if FilePath is provided
+    $mediaInfo = $null
+    if ($FilePath -and (Test-Path $FilePath -PathType Leaf)) {
+        $mediaInfo = Get-MediaInfoDetails -FilePath $FilePath
+    }
+
+    if ($mediaInfo) {
+        $quality.DataSource = "MediaInfo"
+        $quality.Width = $mediaInfo.Width
+        $quality.Height = $mediaInfo.Height
+        $quality.Bitrate = $mediaInfo.Bitrate
+        $quality.AudioChannels = $mediaInfo.AudioChannels
+
+        # Resolution from actual dimensions
+        if ($mediaInfo.Height -ge 2160) {
+            $quality.Resolution = "2160p"
+            $quality.Score += 100
+            $quality.Details += "4K/2160p [MediaInfo: $($mediaInfo.Width)x$($mediaInfo.Height)] (+100)"
+        }
+        elseif ($mediaInfo.Height -ge 1080) {
+            $quality.Resolution = "1080p"
+            $quality.Score += 80
+            $quality.Details += "1080p [MediaInfo: $($mediaInfo.Width)x$($mediaInfo.Height)] (+80)"
+        }
+        elseif ($mediaInfo.Height -ge 720) {
+            $quality.Resolution = "720p"
+            $quality.Score += 60
+            $quality.Details += "720p [MediaInfo: $($mediaInfo.Width)x$($mediaInfo.Height)] (+60)"
+        }
+        elseif ($mediaInfo.Height -ge 480) {
+            $quality.Resolution = "480p"
+            $quality.Score += 40
+            $quality.Details += "480p [MediaInfo: $($mediaInfo.Width)x$($mediaInfo.Height)] (+40)"
+        }
+        elseif ($mediaInfo.Height -gt 0) {
+            $quality.Resolution = "$($mediaInfo.Height)p"
+            $quality.Score += 20
+            $quality.Details += "$($mediaInfo.Height)p [MediaInfo] (+20)"
+        }
+
+        # Video codec from MediaInfo
+        $videoCodec = $mediaInfo.VideoCodec
+        if ($videoCodec) {
+            switch -Regex ($videoCodec) {
+                'HEVC|H\.?265|V_MPEGH' {
+                    $quality.Codec = "HEVC/x265"
+                    $quality.Score += 20
+                    $quality.Details += "HEVC/x265 [MediaInfo: $videoCodec] (+20)"
+                }
+                'AVC|H\.?264|V_MPEG4/ISO/AVC' {
+                    $quality.Codec = "x264"
+                    $quality.Score += 15
+                    $quality.Details += "x264 [MediaInfo: $videoCodec] (+15)"
+                }
+                'AV1' {
+                    $quality.Codec = "AV1"
+                    $quality.Score += 25
+                    $quality.Details += "AV1 [MediaInfo] (+25)"
+                }
+                'VP9' {
+                    $quality.Codec = "VP9"
+                    $quality.Score += 18
+                    $quality.Details += "VP9 [MediaInfo] (+18)"
+                }
+                'MPEG-4|DivX|XviD' {
+                    $quality.Codec = "XviD"
+                    $quality.Score += 5
+                    $quality.Details += "MPEG-4/XviD [MediaInfo: $videoCodec] (+5)"
+                }
+                'VC-1|WMV' {
+                    $quality.Codec = "VC-1"
+                    $quality.Score += 8
+                    $quality.Details += "VC-1 [MediaInfo] (+8)"
+                }
+                default {
+                    $quality.Codec = $videoCodec
+                    $quality.Score += 10
+                    $quality.Details += "$videoCodec [MediaInfo] (+10)"
+                }
+            }
+        }
+
+        # Audio codec from MediaInfo
+        $audioCodec = $mediaInfo.AudioCodec
+        $channels = $mediaInfo.AudioChannels
+        if ($audioCodec) {
+            $channelInfo = if ($channels -gt 0) { " ${channels}ch" } else { "" }
+            switch -Regex ($audioCodec) {
+                'Atmos|E-AC-3.*Atmos|TrueHD.*Atmos' {
+                    $quality.Audio = "Atmos"
+                    $quality.Score += 15
+                    $quality.Details += "Atmos [MediaInfo$channelInfo] (+15)"
+                }
+                'TrueHD' {
+                    $quality.Audio = "TrueHD"
+                    $quality.Score += 12
+                    $quality.Details += "TrueHD [MediaInfo$channelInfo] (+12)"
+                }
+                'DTS-HD|DTS.*HD' {
+                    $quality.Audio = "DTS-HD"
+                    $quality.Score += 10
+                    $quality.Details += "DTS-HD [MediaInfo$channelInfo] (+10)"
+                }
+                'DTS.*X|DTS:X' {
+                    $quality.Audio = "DTS:X"
+                    $quality.Score += 14
+                    $quality.Details += "DTS:X [MediaInfo$channelInfo] (+14)"
+                }
+                '^DTS$|^DTS\s' {
+                    $quality.Audio = "DTS"
+                    $quality.Score += 8
+                    $quality.Details += "DTS [MediaInfo$channelInfo] (+8)"
+                }
+                'E-AC-3|EAC3|DD\+|Dolby Digital Plus' {
+                    $quality.Audio = "EAC3"
+                    $quality.Score += 7
+                    $quality.Details += "EAC3/DD+ [MediaInfo$channelInfo] (+7)"
+                }
+                'AC-3|AC3|Dolby Digital' {
+                    $quality.Audio = "AC3"
+                    $quality.Score += 5
+                    $quality.Details += "AC3 [MediaInfo$channelInfo] (+5)"
+                }
+                'AAC' {
+                    $quality.Audio = "AAC"
+                    $quality.Score += 3
+                    $quality.Details += "AAC [MediaInfo$channelInfo] (+3)"
+                }
+                'FLAC' {
+                    $quality.Audio = "FLAC"
+                    $quality.Score += 6
+                    $quality.Details += "FLAC [MediaInfo$channelInfo] (+6)"
+                }
+                'PCM|LPCM' {
+                    $quality.Audio = "PCM"
+                    $quality.Score += 4
+                    $quality.Details += "PCM [MediaInfo$channelInfo] (+4)"
+                }
+                'Opus' {
+                    $quality.Audio = "Opus"
+                    $quality.Score += 4
+                    $quality.Details += "Opus [MediaInfo$channelInfo] (+4)"
+                }
+                'Vorbis' {
+                    $quality.Audio = "Vorbis"
+                    $quality.Score += 2
+                    $quality.Details += "Vorbis [MediaInfo$channelInfo] (+2)"
+                }
+                'MP3|MPEG Audio' {
+                    $quality.Audio = "MP3"
+                    $quality.Score += 1
+                    $quality.Details += "MP3 [MediaInfo$channelInfo] (+1)"
+                }
+                default {
+                    $quality.Audio = $audioCodec
+                    $quality.Score += 2
+                    $quality.Details += "$audioCodec [MediaInfo$channelInfo] (+2)"
+                }
+            }
+        }
+
+        # HDR detection from MediaInfo
+        if ($mediaInfo.HDR) {
+            $quality.HDR = $true
+            # Get detailed HDR format if available
+            $hdrFormat = Get-MediaInfoHDRFormat -FilePath $FilePath
+            if ($hdrFormat) {
+                $quality.HDRFormat = $hdrFormat.Format
+                switch ($hdrFormat.Format) {
+                    "Dolby Vision" {
+                        $quality.Score += 18
+                        $quality.Details += "Dolby Vision [MediaInfo] (+18)"
+                    }
+                    "HDR10+" {
+                        $quality.Score += 16
+                        $quality.Details += "HDR10+ [MediaInfo] (+16)"
+                    }
+                    "HDR10" {
+                        $quality.Score += 12
+                        $quality.Details += "HDR10 [MediaInfo] (+12)"
+                    }
+                    "HLG" {
+                        $quality.Score += 10
+                        $quality.Details += "HLG [MediaInfo] (+10)"
+                    }
+                    default {
+                        $quality.Score += 10
+                        $quality.Details += "HDR [MediaInfo] (+10)"
+                    }
+                }
+            }
+            else {
+                $quality.Score += 10
+                $quality.Details += "HDR [MediaInfo] (+10)"
+            }
+        }
+
+        # Source detection still from filename (MediaInfo can't detect source)
+        $fileNameLower = $FileName.ToLower()
+        if ($fileNameLower -match 'bluray|blu-ray|bdrip|brrip') {
+            $quality.Source = "BluRay"
+            $quality.Score += 30
+            $quality.Details += "BluRay (+30)"
+        }
+        elseif ($fileNameLower -match 'remux') {
+            $quality.Source = "Remux"
+            $quality.Score += 35
+            $quality.Details += "Remux (+35)"
+        }
+        elseif ($fileNameLower -match 'web-dl|webdl') {
+            $quality.Source = "WEB-DL"
+            $quality.Score += 25
+            $quality.Details += "WEB-DL (+25)"
+        }
+        elseif ($fileNameLower -match 'webrip') {
+            $quality.Source = "WEBRip"
+            $quality.Score += 20
+            $quality.Details += "WEBRip (+20)"
+        }
+        elseif ($fileNameLower -match 'hdtv') {
+            $quality.Source = "HDTV"
+            $quality.Score += 15
+            $quality.Details += "HDTV (+15)"
+        }
+        elseif ($fileNameLower -match 'dvdrip') {
+            $quality.Source = "DVDRip"
+            $quality.Score += 10
+            $quality.Details += "DVDRip (+10)"
+        }
+
+        # Bitrate bonus (higher bitrate = better quality)
+        if ($quality.Bitrate -gt 0) {
+            $bitrateMbps = [math]::Round($quality.Bitrate / 1000000, 1)
+            if ($bitrateMbps -ge 40) {
+                $quality.Score += 20
+                $quality.Details += "High Bitrate [${bitrateMbps} Mbps] (+20)"
+            }
+            elseif ($bitrateMbps -ge 20) {
+                $quality.Score += 15
+                $quality.Details += "Good Bitrate [${bitrateMbps} Mbps] (+15)"
+            }
+            elseif ($bitrateMbps -ge 10) {
+                $quality.Score += 10
+                $quality.Details += "Moderate Bitrate [${bitrateMbps} Mbps] (+10)"
+            }
+            elseif ($bitrateMbps -ge 5) {
+                $quality.Score += 5
+                $quality.Details += "Low Bitrate [${bitrateMbps} Mbps] (+5)"
+            }
+        }
+
+        return $quality
+    }
+
+    # Fallback to filename parsing if MediaInfo not available
+    $quality.DataSource = "Filename"
     $fileNameLower = $FileName.ToLower()
 
     # Resolution scoring
@@ -2305,7 +2691,12 @@ function Get-QualityScore {
     }
 
     # Source scoring
-    if ($fileNameLower -match 'bluray|blu-ray|bdrip|brrip') {
+    if ($fileNameLower -match 'remux') {
+        $quality.Source = "Remux"
+        $quality.Score += 35
+        $quality.Details += "Remux (+35)"
+    }
+    elseif ($fileNameLower -match 'bluray|blu-ray|bdrip|brrip') {
         $quality.Source = "BluRay"
         $quality.Score += 30
         $quality.Details += "BluRay (+30)"
@@ -2332,10 +2723,20 @@ function Get-QualityScore {
     }
 
     # Codec scoring
-    if ($fileNameLower -match 'x265|h\.?265|hevc') {
+    if ($fileNameLower -match 'av1') {
+        $quality.Codec = "AV1"
+        $quality.Score += 25
+        $quality.Details += "AV1 (+25)"
+    }
+    elseif ($fileNameLower -match 'x265|h\.?265|hevc') {
         $quality.Codec = "HEVC/x265"
         $quality.Score += 20
         $quality.Details += "HEVC/x265 (+20)"
+    }
+    elseif ($fileNameLower -match 'vp9') {
+        $quality.Codec = "VP9"
+        $quality.Score += 18
+        $quality.Details += "VP9 (+18)"
     }
     elseif ($fileNameLower -match 'x264|h\.?264|avc') {
         $quality.Codec = "x264"
@@ -2354,12 +2755,17 @@ function Get-QualityScore {
         $quality.Score += 15
         $quality.Details += "Atmos (+15)"
     }
+    elseif ($fileNameLower -match 'dts[\s\.\-]?x|dtsx') {
+        $quality.Audio = "DTS:X"
+        $quality.Score += 14
+        $quality.Details += "DTS:X (+14)"
+    }
     elseif ($fileNameLower -match 'truehd') {
         $quality.Audio = "TrueHD"
         $quality.Score += 12
         $quality.Details += "TrueHD (+12)"
     }
-    elseif ($fileNameLower -match 'dts-hd|dtshd') {
+    elseif ($fileNameLower -match 'dts-hd|dtshd|dts[\s\.\-]?hd[\s\.\-]?ma') {
         $quality.Audio = "DTS-HD"
         $quality.Score += 10
         $quality.Details += "DTS-HD (+10)"
@@ -2369,35 +2775,60 @@ function Get-QualityScore {
         $quality.Score += 8
         $quality.Details += "DTS (+8)"
     }
+    elseif ($fileNameLower -match 'eac3|ddp|dd\+|dolby\s*digital\s*plus') {
+        $quality.Audio = "EAC3"
+        $quality.Score += 7
+        $quality.Details += "EAC3/DD+ (+7)"
+    }
     elseif ($fileNameLower -match 'ac3|dd5\.?1') {
         $quality.Audio = "AC3"
         $quality.Score += 5
         $quality.Details += "AC3 (+5)"
+    }
+    elseif ($fileNameLower -match 'flac') {
+        $quality.Audio = "FLAC"
+        $quality.Score += 6
+        $quality.Details += "FLAC (+6)"
     }
     elseif ($fileNameLower -match 'aac') {
         $quality.Audio = "AAC"
         $quality.Score += 3
         $quality.Details += "AAC (+3)"
     }
+    elseif ($fileNameLower -match 'opus') {
+        $quality.Audio = "Opus"
+        $quality.Score += 4
+        $quality.Details += "Opus (+4)"
+    }
 
     # HDR scoring
-    if ($fileNameLower -match 'hdr10\+|hdr10plus') {
+    if ($fileNameLower -match 'dolby[\s\.\-]?vision|dovi|dv[\s\.\-]hdr|\.dv\.') {
         $quality.HDR = $true
-        $quality.Score += 15
-        $quality.Details += "HDR10+ (+15)"
+        $quality.HDRFormat = "Dolby Vision"
+        $quality.Score += 18
+        $quality.Details += "Dolby Vision (+18)"
     }
-    elseif ($fileNameLower -match 'dolby\s*vision|dovi|dv') {
+    elseif ($fileNameLower -match 'hdr10\+|hdr10plus') {
         $quality.HDR = $true
-        $quality.Score += 15
-        $quality.Details += "Dolby Vision (+15)"
+        $quality.HDRFormat = "HDR10+"
+        $quality.Score += 16
+        $quality.Details += "HDR10+ (+16)"
     }
     elseif ($fileNameLower -match 'hdr10') {
         $quality.HDR = $true
+        $quality.HDRFormat = "HDR10"
         $quality.Score += 12
         $quality.Details += "HDR10 (+12)"
     }
+    elseif ($fileNameLower -match 'hlg') {
+        $quality.HDR = $true
+        $quality.HDRFormat = "HLG"
+        $quality.Score += 10
+        $quality.Details += "HLG (+10)"
+    }
     elseif ($fileNameLower -match 'hdr') {
         $quality.HDR = $true
+        $quality.HDRFormat = "HDR"
         $quality.Score += 10
         $quality.Details += "HDR (+10)"
     }
@@ -2491,13 +2922,14 @@ function Find-DuplicateMovies {
             Write-Progress -Activity "Scanning for duplicates" -Status "Processing $currentIndex of $totalFolders - $($folder.Name)" -PercentComplete $percentComplete
 
             $titleInfo = Get-NormalizedTitle -Name $folder.Name
-            $quality = Get-QualityScore -FileName $folder.Name
 
             # Find the main video file for size info
             $videoFile = Get-ChildItem -Path $folder.FullName -File -ErrorAction SilentlyContinue |
                 Where-Object { $script:Config.VideoExtensions -contains $_.Extension.ToLower() } |
                 Sort-Object Length -Descending |
                 Select-Object -First 1
+
+            $quality = Get-QualityScore -FileName $folder.Name -FilePath $(if ($videoFile) { $videoFile.FullName } else { $null })
 
             $entry = @{
                 Path = $folder.FullName
@@ -2935,43 +3367,38 @@ function Get-VideoCodecInfo {
         $info.FileSize = $file.Length
         $info.Container = $file.Extension.TrimStart('.').ToUpper()
 
-        # Parse from filename
-        $quality = Get-QualityScore -FileName $file.Name
+        # Get quality info using MediaInfo when available
+        $quality = Get-QualityScore -FileName $file.Name -FilePath $file.FullName
         $info.Resolution = $quality.Resolution
         $info.VideoCodec = $quality.Codec
         $info.AudioCodec = $quality.Audio
         $info.HDR = $quality.HDR
 
-        # Determine if transcoding is needed (for common compatibility issues)
-        # HEVC/x265 may need transcoding for older devices
-        if ($info.VideoCodec -eq "HEVC/x265") {
-            $info.NeedsTranscode = $true
-            $info.TranscodeReason += "HEVC may not play on older devices"
-        }
+        # Determine processing needed based on codec and container
+        # TranscodeMode: "none" = keep as-is, "remux" = copy streams to MKV, "transcode" = re-encode
+        $info.TranscodeMode = "none"
 
-        # 4K content may need transcoding for bandwidth
-        if ($info.Resolution -eq "2160p") {
+        # XviD/DivX are legacy codecs - need full transcode to H.264
+        if ($info.VideoCodec -eq "XviD" -or $info.VideoCodec -eq "DivX" -or $info.VideoCodec -eq "MPEG-4") {
             $info.NeedsTranscode = $true
-            $info.TranscodeReason += "4K may require transcoding for streaming"
+            $info.TranscodeMode = "transcode"
+            $info.TranscodeReason += "XviD/DivX/MPEG-4 is a legacy codec - will transcode to H.264"
         }
-
-        # HDR content needs tone mapping for SDR displays
-        if ($info.HDR) {
+        # H.264 in AVI container - remux only (no quality loss)
+        elseif (($info.VideoCodec -eq "H264" -or $info.VideoCodec -eq "AVC" -or $info.VideoCodec -eq "H.264") -and $info.Container -eq "AVI") {
             $info.NeedsTranscode = $true
-            $info.TranscodeReason += "HDR requires tone mapping for SDR displays"
+            $info.TranscodeMode = "remux"
+            $info.TranscodeReason += "H.264 in AVI container - will remux to MKV (no re-encoding)"
         }
-
-        # AVI container is outdated
-        if ($info.Container -eq "AVI") {
+        # AVI with unknown codec - likely legacy, transcode it
+        elseif ($info.Container -eq "AVI") {
             $info.NeedsTranscode = $true
-            $info.TranscodeReason += "AVI container is outdated"
+            $info.TranscodeMode = "transcode"
+            $info.TranscodeReason += "AVI with legacy codec - will transcode to H.264"
         }
-
-        # XviD/DivX are legacy codecs
-        if ($info.VideoCodec -eq "XviD") {
-            $info.NeedsTranscode = $true
-            $info.TranscodeReason += "XviD/DivX is a legacy codec"
-        }
+        # HEVC/x265 - keep as-is (it's a modern efficient codec)
+        # H.264 in modern containers (MKV, MP4) - keep as-is
+        # Note: HDR and 4K are NOT flagged for transcode - they're features, not problems
 
         return $info
     }
@@ -3058,6 +3485,7 @@ function Invoke-CodecAnalysis {
                     Codec = $info.VideoCodec
                     Container = $info.Container
                     Reasons = $info.TranscodeReason -join "; "
+                    TranscodeMode = $info.TranscodeMode
                 }
             }
 
@@ -3136,15 +3564,18 @@ function Invoke-CodecAnalysis {
     Generates FFmpeg commands for transcoding files in the queue
 .PARAMETER TranscodeQueue
     Array of files needing transcoding (from Invoke-CodecAnalysis)
-.PARAMETER OutputFolder
-    Folder to output transcoded files
 .PARAMETER TargetCodec
     Target video codec (default: libx264)
+.DESCRIPTION
+    Creates a PowerShell script that processes files in-place:
+    - Remux: Copies streams to MKV container (fast, no quality loss)
+    - Transcode: Re-encodes legacy codecs to H.264
+    Output files replace originals in their original folders.
+    Original files are deleted only after successful processing.
 #>
 function New-TranscodeScript {
     param(
         [array]$TranscodeQueue,
-        [string]$OutputFolder,
         [string]$TargetCodec = "libx264",
         [string]$TargetResolution = $null  # e.g., "1920:1080" for 1080p
     )
@@ -3154,6 +3585,21 @@ function New-TranscodeScript {
         return
     }
 
+    # Check FFmpeg installation
+    if (-not (Test-FFmpegInstallation)) {
+        Write-Host "`nFFmpeg not found!" -ForegroundColor Red
+        Write-Host "Please install FFmpeg to use transcoding features." -ForegroundColor Yellow
+        Write-Host "Download from: https://ffmpeg.org/download.html" -ForegroundColor Cyan
+        Write-Host "Or install via: winget install ffmpeg" -ForegroundColor Cyan
+        Write-Log "FFmpeg not found - transcode script generation aborted" "ERROR"
+        return $null
+    }
+
+    # Count files by mode
+    $remuxCount = ($TranscodeQueue | Where-Object { $_.TranscodeMode -eq "remux" }).Count
+    $transcodeCount = ($TranscodeQueue | Where-Object { $_.TranscodeMode -eq "transcode" -or $_.TranscodeMode -eq $null }).Count
+
+    $ffmpegPath = $script:Config.FFmpegPath
     $scriptPath = Join-Path $PSScriptRoot "transcode_$(Get-Date -Format 'yyyyMMdd_HHmmss').ps1"
 
     $scriptContent = @"
@@ -3161,20 +3607,27 @@ function New-TranscodeScript {
 # Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
 # Target Codec: $TargetCodec
 # Files to process: $($TranscodeQueue.Count)
+#   - Remux only (no re-encoding): $remuxCount
+#   - Full transcode: $transcodeCount
+#
+# Output files are saved in the same folder as the original.
+# Original files are deleted after successful processing.
 
 `$ffmpegPath = "ffmpeg"  # Update this path if ffmpeg is not in PATH
-`$outputFolder = "$OutputFolder"
-
-if (-not (Test-Path `$outputFolder)) {
-    New-Item -Path `$outputFolder -ItemType Directory -Force | Out-Null
-}
 
 `$files = @(
 "@
 
     foreach ($item in $TranscodeQueue) {
-        $outputFile = Join-Path $OutputFolder ([System.IO.Path]::GetFileNameWithoutExtension($item.FileName) + "_transcoded.mkv")
-        $scriptContent += "`n    @{ Input = '$($item.Path)'; Output = '$outputFile' }"
+        # Output goes to same folder as input, with .mkv extension
+        $inputDir = [System.IO.Path]::GetDirectoryName($item.Path)
+        $baseName = [System.IO.Path]::GetFileNameWithoutExtension($item.FileName)
+        $outputFile = Join-Path $inputDir ($baseName + ".mkv")
+        $mode = if ($item.TranscodeMode) { $item.TranscodeMode } else { "transcode" }
+        # Escape single quotes by doubling them for PowerShell string literals
+        $escapedInput = $item.Path -replace "'", "''"
+        $escapedOutput = $outputFile -replace "'", "''"
+        $scriptContent += "`n    @{ Input = '$escapedInput'; Output = '$escapedOutput'; Mode = '$mode' },"
     }
 
     $resolutionParam = if ($TargetResolution) { "-vf scale=$TargetResolution" } else { "" }
@@ -3185,28 +3638,110 @@ if (-not (Test-Path `$outputFolder)) {
 
 `$total = `$files.Count
 `$current = 1
+`$remuxed = 0
+`$transcoded = 0
+`$failed = 0
+`$deleted = 0
 
 foreach (`$file in `$files) {
-    Write-Host "[`$current/`$total] Transcoding: `$(`$file.Input)" -ForegroundColor Yellow
+    # Skip if input and output are the same file (already .mkv with same name)
+    if (`$file.Input -eq `$file.Output) {
+        Write-Host "[`$current/`$total] Skipping (output same as input): `$(`$file.Input)" -ForegroundColor Gray
+        `$current++
+        continue
+    }
 
-    & `$ffmpegPath -i "`$(`$file.Input)" -c:v $TargetCodec -crf 23 -preset medium $resolutionParam -c:a aac -b:a 192k "`$(`$file.Output)" -y
+    # Use temp file to avoid issues if input/output are in same folder
+    `$tempOutput = `$file.Output + ".tmp.mkv"
 
-    if (`$LASTEXITCODE -eq 0) {
-        Write-Host "Success: `$(`$file.Output)" -ForegroundColor Green
+    if (`$file.Mode -eq "remux") {
+        # REMUX: Copy streams without re-encoding (fast, no quality loss)
+        Write-Host "[`$current/`$total] Remuxing (no re-encode): `$(`$file.Input)" -ForegroundColor Cyan
+        & `$ffmpegPath -i "`$(`$file.Input)" -c:v copy -c:a copy -c:s copy "`$tempOutput" -y
+
+        if (`$LASTEXITCODE -eq 0 -and (Test-Path `$tempOutput)) {
+            # Verify output file is valid (has size > 0)
+            `$outSize = (Get-Item `$tempOutput).Length
+            if (`$outSize -gt 0) {
+                # Delete original and rename temp to final
+                Remove-Item -Path `$file.Input -Force
+                Rename-Item -Path `$tempOutput -NewName ([System.IO.Path]::GetFileName(`$file.Output))
+                Write-Host "  -> Remuxed & replaced: `$(`$file.Output)" -ForegroundColor Green
+                `$remuxed++
+                `$deleted++
+            } else {
+                Write-Host "  -> Failed (output empty): `$(`$file.Input)" -ForegroundColor Red
+                Remove-Item -Path `$tempOutput -Force -ErrorAction SilentlyContinue
+                `$failed++
+            }
+        } else {
+            Write-Host "  -> Failed: `$(`$file.Input)" -ForegroundColor Red
+            Remove-Item -Path `$tempOutput -Force -ErrorAction SilentlyContinue
+            `$failed++
+        }
     } else {
-        Write-Host "Failed: `$(`$file.Input)" -ForegroundColor Red
+        # TRANSCODE: Re-encode video to H.264
+        Write-Host "[`$current/`$total] Transcoding: `$(`$file.Input)" -ForegroundColor Yellow
+        & `$ffmpegPath -i "`$(`$file.Input)" -map 0:v -map 0:a -map 0:s? -c:v $TargetCodec -crf 23 -preset medium $resolutionParam -c:a aac -b:a 192k -c:s copy "`$tempOutput" -y
+
+        if (`$LASTEXITCODE -eq 0 -and (Test-Path `$tempOutput)) {
+            # Verify output file is valid (has size > 0)
+            `$outSize = (Get-Item `$tempOutput).Length
+            if (`$outSize -gt 0) {
+                # Delete original and rename temp to final
+                Remove-Item -Path `$file.Input -Force
+                Rename-Item -Path `$tempOutput -NewName ([System.IO.Path]::GetFileName(`$file.Output))
+                Write-Host "  -> Transcoded & replaced: `$(`$file.Output)" -ForegroundColor Green
+                `$transcoded++
+                `$deleted++
+
+                # 5-second pause to allow user to stop
+                Write-Host "  Press any key within 5 seconds to stop, or wait to continue..." -ForegroundColor Magenta
+                `$timeout = 5
+                `$stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+                while (`$stopwatch.Elapsed.TotalSeconds -lt `$timeout) {
+                    if ([Console]::KeyAvailable) {
+                        `$null = [Console]::ReadKey(`$true)
+                        Write-Host "``n  User requested stop. Exiting..." -ForegroundColor Yellow
+                        Write-Host "``n========== Summary (Stopped Early) ==========" -ForegroundColor Cyan
+                        Write-Host "Remuxed (fast, no quality loss): `$remuxed" -ForegroundColor Cyan
+                        Write-Host "Transcoded (re-encoded): `$transcoded" -ForegroundColor Yellow
+                        Write-Host "Original files deleted: `$deleted" -ForegroundColor Green
+                        Write-Host "Failed: `$failed" -ForegroundColor Red
+                        Write-Host "==============================================" -ForegroundColor Cyan
+                        exit
+                    }
+                    Start-Sleep -Milliseconds 100
+                }
+            } else {
+                Write-Host "  -> Failed (output empty): `$(`$file.Input)" -ForegroundColor Red
+                Remove-Item -Path `$tempOutput -Force -ErrorAction SilentlyContinue
+                `$failed++
+            }
+        } else {
+            Write-Host "  -> Failed: `$(`$file.Input)" -ForegroundColor Red
+            Remove-Item -Path `$tempOutput -Force -ErrorAction SilentlyContinue
+            `$failed++
+        }
     }
 
     `$current++
 }
 
-Write-Host "`nTranscoding complete!" -ForegroundColor Cyan
+Write-Host "`n========== Summary ==========" -ForegroundColor Cyan
+Write-Host "Remuxed (fast, no quality loss): `$remuxed" -ForegroundColor Cyan
+Write-Host "Transcoded (re-encoded): `$transcoded" -ForegroundColor Yellow
+Write-Host "Original files deleted: `$deleted" -ForegroundColor Green
+Write-Host "Failed: `$failed" -ForegroundColor $(if (`$failed -gt 0) { 'Red' } else { 'Green' })
+Write-Host "==============================" -ForegroundColor Cyan
 "@
 
     $scriptContent | Out-File -FilePath $scriptPath -Encoding UTF8
     Write-Host "`nTranscode script created: $scriptPath" -ForegroundColor Green
-    Write-Host "Edit the script to customize FFmpeg parameters, then run it." -ForegroundColor Cyan
-    Write-Log "Transcode script created: $scriptPath" "INFO"
+    Write-Host "  - Remux only (fast, no quality loss): $remuxCount files" -ForegroundColor Cyan
+    Write-Host "  - Full transcode (re-encode): $transcodeCount files" -ForegroundColor Yellow
+    Write-Host "`nRun the script to start processing, or edit it to customize parameters." -ForegroundColor Cyan
+    Write-Log "Transcode script created: $scriptPath - Remux: $remuxCount, Transcode: $transcodeCount" "INFO"
 
     return $scriptPath
 }
@@ -4619,6 +5154,7 @@ switch ($type) {
         # Codec Analysis mode
         Write-Host "`n=== Codec Analysis Mode ===" -ForegroundColor Cyan
         Write-Host "MediaInfo integration: $(if (Test-MediaInfoInstallation) { 'Available' } else { 'Not found (using filename parsing)' })" -ForegroundColor $(if (Test-MediaInfoInstallation) { 'Green' } else { 'Yellow' })
+        Write-Host "FFmpeg: $(if (Test-FFmpegInstallation) { 'Available' } else { 'Not found (required for transcoding)' })" -ForegroundColor $(if (Test-FFmpegInstallation) { 'Green' } else { 'Yellow' })
 
         $path = Select-FolderDialog -Description "Select your media library folder"
         if ($path) {
@@ -4627,8 +5163,7 @@ switch ($type) {
             if ($analysis -and $analysis.NeedTranscode.Count -gt 0) {
                 $generateScript = Read-Host "`nGenerate FFmpeg transcode script? (Y/N) [N]"
                 if ($generateScript -eq 'Y' -or $generateScript -eq 'y') {
-                    $outputFolder = Join-Path $path "_Transcoded"
-                    New-TranscodeScript -TranscodeQueue $analysis.NeedTranscode -OutputFolder $outputFolder
+                    New-TranscodeScript -TranscodeQueue $analysis.NeedTranscode
                 }
             }
         }

@@ -79,7 +79,10 @@ BeforeAll {
 
     # Get-QualityScore
     function Get-QualityScore {
-        param([string]$FileName)
+        param(
+            [string]$FileName,
+            [string]$FilePath = $null
+        )
 
         $quality = @{
             Score = 0
@@ -88,7 +91,13 @@ BeforeAll {
             Source = "Unknown"
             Audio = "Unknown"
             HDR = $false
+            HDRFormat = $null
+            Bitrate = 0
+            Width = 0
+            Height = 0
+            AudioChannels = 0
             Details = @()
+            DataSource = "Filename"
         }
 
         $fileNameLower = $FileName.ToLower()
@@ -112,7 +121,11 @@ BeforeAll {
         }
 
         # Source
-        if ($fileNameLower -match 'bluray|blu-ray|bdrip|brrip') {
+        if ($fileNameLower -match 'remux') {
+            $quality.Source = "Remux"
+            $quality.Score += 35
+        }
+        elseif ($fileNameLower -match 'bluray|blu-ray|bdrip|brrip') {
             $quality.Source = "BluRay"
             $quality.Score += 30
         }
@@ -130,7 +143,11 @@ BeforeAll {
         }
 
         # Codec
-        if ($fileNameLower -match 'x265|h\.?265|hevc') {
+        if ($fileNameLower -match 'av1') {
+            $quality.Codec = "AV1"
+            $quality.Score += 25
+        }
+        elseif ($fileNameLower -match 'x265|h\.?265|hevc') {
             $quality.Codec = "HEVC/x265"
             $quality.Score += 20
         }
@@ -144,9 +161,29 @@ BeforeAll {
             $quality.Audio = "Atmos"
             $quality.Score += 15
         }
+        elseif ($fileNameLower -match 'dts[\s\.\-]?x|dtsx') {
+            $quality.Audio = "DTS:X"
+            $quality.Score += 14
+        }
+        elseif ($fileNameLower -match 'truehd') {
+            $quality.Audio = "TrueHD"
+            $quality.Score += 12
+        }
+        elseif ($fileNameLower -match 'dts-hd|dtshd') {
+            $quality.Audio = "DTS-HD"
+            $quality.Score += 10
+        }
         elseif ($fileNameLower -match 'dts') {
             $quality.Audio = "DTS"
             $quality.Score += 8
+        }
+        elseif ($fileNameLower -match 'eac3|ddp|dd\+') {
+            $quality.Audio = "EAC3"
+            $quality.Score += 7
+        }
+        elseif ($fileNameLower -match 'ac3|dd5\.?1') {
+            $quality.Audio = "AC3"
+            $quality.Score += 5
         }
         elseif ($fileNameLower -match 'aac') {
             $quality.Audio = "AAC"
@@ -154,8 +191,29 @@ BeforeAll {
         }
 
         # HDR
-        if ($fileNameLower -match 'hdr') {
+        if ($fileNameLower -match 'dolby[\s\.\-]?vision|dovi|dv[\s\.\-]hdr') {
             $quality.HDR = $true
+            $quality.HDRFormat = "Dolby Vision"
+            $quality.Score += 18
+        }
+        elseif ($fileNameLower -match 'hdr10\+|hdr10plus') {
+            $quality.HDR = $true
+            $quality.HDRFormat = "HDR10+"
+            $quality.Score += 16
+        }
+        elseif ($fileNameLower -match 'hdr10') {
+            $quality.HDR = $true
+            $quality.HDRFormat = "HDR10"
+            $quality.Score += 12
+        }
+        elseif ($fileNameLower -match 'hlg') {
+            $quality.HDR = $true
+            $quality.HDRFormat = "HLG"
+            $quality.Score += 10
+        }
+        elseif ($fileNameLower -match 'hdr') {
+            $quality.HDR = $true
+            $quality.HDRFormat = "HDR"
             $quality.Score += 10
         }
 
@@ -342,9 +400,97 @@ Describe "Get-QualityScore" {
             $result.HDR | Should -Be $true
         }
 
+        It "Detects Dolby Vision" {
+            $result = Get-QualityScore "Movie.2160p.BluRay.DoVi.x265.mkv"
+            $result.HDR | Should -Be $true
+            $result.HDRFormat | Should -Be "Dolby Vision"
+        }
+
+        It "Detects HDR10+" {
+            $result = Get-QualityScore "Movie.2160p.BluRay.HDR10Plus.x265.mkv"
+            $result.HDR | Should -Be $true
+            $result.HDRFormat | Should -Be "HDR10+"
+        }
+
+        It "Detects HDR10" {
+            $result = Get-QualityScore "Movie.2160p.BluRay.HDR10.x265.mkv"
+            $result.HDR | Should -Be $true
+            $result.HDRFormat | Should -Be "HDR10"
+        }
+
+        It "Detects HLG" {
+            $result = Get-QualityScore "Movie.2160p.BluRay.HLG.x265.mkv"
+            $result.HDR | Should -Be $true
+            $result.HDRFormat | Should -Be "HLG"
+        }
+
         It "Non-HDR content returns false" {
             $result = Get-QualityScore "Movie.1080p.BluRay.x264.mkv"
             $result.HDR | Should -Be $false
+        }
+    }
+
+    Context "Audio Codec Detection" {
+        It "Detects Atmos" {
+            $result = Get-QualityScore "Movie.2160p.BluRay.TrueHD.Atmos.mkv"
+            $result.Audio | Should -Be "Atmos"
+        }
+
+        It "Detects TrueHD" {
+            $result = Get-QualityScore "Movie.2160p.BluRay.TrueHD.mkv"
+            $result.Audio | Should -Be "TrueHD"
+        }
+
+        It "Detects DTS-HD" {
+            $result = Get-QualityScore "Movie.1080p.BluRay.DTS-HD.mkv"
+            $result.Audio | Should -Be "DTS-HD"
+        }
+
+        It "Detects DTS:X" {
+            $result = Get-QualityScore "Movie.2160p.BluRay.DTS-X.mkv"
+            $result.Audio | Should -Be "DTS:X"
+        }
+
+        It "Detects EAC3/DD+" {
+            $result = Get-QualityScore "Movie.1080p.WEB-DL.DDP.mkv"
+            $result.Audio | Should -Be "EAC3"
+        }
+    }
+
+    Context "New Codecs" {
+        It "Detects AV1 codec" {
+            $result = Get-QualityScore "Movie.2160p.WEB-DL.AV1.mkv"
+            $result.Codec | Should -Be "AV1"
+            $result.Score | Should -BeGreaterThan (Get-QualityScore "Movie.2160p.WEB-DL.x265.mkv").Score
+        }
+    }
+
+    Context "Remux Source" {
+        It "Detects Remux source" {
+            $result = Get-QualityScore "Movie.2160p.BluRay.Remux.mkv"
+            $result.Source | Should -Be "Remux"
+        }
+
+        It "Remux has higher score than BluRay" {
+            $remuxScore = (Get-QualityScore "Movie.2160p.BluRay.Remux.mkv").Score
+            $blurayScore = (Get-QualityScore "Movie.2160p.BluRay.x265.mkv").Score
+            $remuxScore | Should -BeGreaterThan $blurayScore
+        }
+    }
+
+    Context "New Properties" {
+        It "Has DataSource property" {
+            $result = Get-QualityScore "Movie.1080p.BluRay.x264.mkv"
+            $result.DataSource | Should -Be "Filename"
+        }
+
+        It "Has HDRFormat property" {
+            $result = Get-QualityScore "Movie.2160p.BluRay.HDR10.x265.mkv"
+            $result.HDRFormat | Should -Be "HDR10"
+        }
+
+        It "Accepts optional FilePath parameter" {
+            { Get-QualityScore -FileName "Movie.mkv" -FilePath "C:\nonexistent\Movie.mkv" } | Should -Not -Throw
         }
     }
 
