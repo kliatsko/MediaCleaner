@@ -1,6 +1,6 @@
 # MediaCleaner
 
-A powerful PowerShell tool for automated media library organization and cleanup. Designed for managing movie and TV show collections with support for Kodi/Plex-compatible naming and metadata.
+A PowerShell tool for media library organization and cleanup. Designed for managing movie and TV show collections with support for Kodi/Plex-compatible naming and metadata.
 
 ![PowerShell](https://img.shields.io/badge/PowerShell-5.1+-blue.svg)
 ![Windows](https://img.shields.io/badge/Windows-10+-green.svg)
