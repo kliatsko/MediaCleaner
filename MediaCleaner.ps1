@@ -78,7 +78,7 @@
     - .rar, .zip, .7z, .tar, .gz, .bz2
 
     Log File Location:
-    - Same directory as the script, named MediaCleaner_YYYYMMDD_HHMMSS.log
+    - %LOCALAPPDATA%\MediaCleaner\Logs\MediaCleaner_YYYYMMDD_HHMMSS.log
 
 .LINK
     https://github.com/yourusername/MediaCleaner
@@ -112,10 +112,11 @@ Write-Verbose-Message "Windows Forms loaded successfully"
 # AppData folder for logs, config, and undo manifests (won't be uploaded to GitHub)
 $script:AppDataFolder = Join-Path $env:LOCALAPPDATA "MediaCleaner"
 $script:LogsFolder = Join-Path $script:AppDataFolder "Logs"
+$script:ReportsFolder = Join-Path $script:AppDataFolder "Reports"
 $script:UndoFolder = Join-Path $script:AppDataFolder "Undo"
 
 # Create folders if they don't exist
-@($script:AppDataFolder, $script:LogsFolder, $script:UndoFolder) | ForEach-Object {
+@($script:AppDataFolder, $script:LogsFolder, $script:ReportsFolder, $script:UndoFolder) | ForEach-Object {
     if (-not (Test-Path $_)) {
         New-Item -Path $_ -ItemType Directory -Force | Out-Null
     }
@@ -211,7 +212,7 @@ function Import-Configuration {
             }
 
             # Ensure LogFile is unique for each session
-            $script:Config.LogFile = Join-Path $PSScriptRoot "MediaCleaner_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
+            $script:Config.LogFile = Join-Path $script:LogsFolder "MediaCleaner_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
 
             Write-Host "Configuration loaded from: $Path" -ForegroundColor Green
             return $true
@@ -691,33 +692,43 @@ function Get-MediaInfoDetails {
     }
 
     try {
-        # Get video stream info
-        $videoCodec = & $script:Config.MediaInfoPath --Inform="Video;%Format%" "$FilePath" 2>$null
-        $width = & $script:Config.MediaInfoPath --Inform="Video;%Width%" "$FilePath" 2>$null
-        $height = & $script:Config.MediaInfoPath --Inform="Video;%Height%" "$FilePath" 2>$null
-        $duration = & $script:Config.MediaInfoPath --Inform="General;%Duration%" "$FilePath" 2>$null
-        $bitrate = & $script:Config.MediaInfoPath --Inform="General;%OverallBitRate%" "$FilePath" 2>$null
-        $frameRate = & $script:Config.MediaInfoPath --Inform="Video;%FrameRate%" "$FilePath" 2>$null
-        $hdrFormat = & $script:Config.MediaInfoPath --Inform="Video;%HDR_Format%" "$FilePath" 2>$null
-        $colorSpace = & $script:Config.MediaInfoPath --Inform="Video;%colour_primaries%" "$FilePath" 2>$null
+        # Use JSON output for more reliable parsing - single call gets everything
+        $jsonOutput = & $script:Config.MediaInfoPath --Output=JSON "$FilePath" 2>$null
 
-        # Get audio stream info
-        $audioCodec = & $script:Config.MediaInfoPath --Inform="Audio;%Format%" "$FilePath" 2>$null
-        $audioChannels = & $script:Config.MediaInfoPath --Inform="Audio;%Channels%" "$FilePath" 2>$null
+        if ($jsonOutput) {
+            $mediaData = $jsonOutput | ConvertFrom-Json
 
-        # Get container info
-        $container = & $script:Config.MediaInfoPath --Inform="General;%Format%" "$FilePath" 2>$null
+            # Get General track info
+            $generalTrack = $mediaData.media.track | Where-Object { $_.'@type' -eq 'General' } | Select-Object -First 1
+            if ($generalTrack) {
+                if ($generalTrack.Duration) { $info.Duration = [long]([double]$generalTrack.Duration * 1000) }
+                if ($generalTrack.OverallBitRate) { $info.Bitrate = [long]$generalTrack.OverallBitRate }
+                if ($generalTrack.Format) { $info.Container = $generalTrack.Format }
+            }
 
-        # Populate info
-        if ($videoCodec) { $info.VideoCodec = $videoCodec.Trim() }
-        if ($width) { $info.Width = [int]$width }
-        if ($height) { $info.Height = [int]$height }
-        if ($duration) { $info.Duration = [long]$duration }
-        if ($bitrate) { $info.Bitrate = [long]$bitrate }
-        if ($frameRate) { $info.FrameRate = [double]$frameRate }
-        if ($audioCodec) { $info.AudioCodec = $audioCodec.Trim() }
-        if ($audioChannels) { $info.AudioChannels = [int]$audioChannels }
-        if ($container) { $info.Container = $container.Trim() }
+            # Get Video track info
+            $videoTrack = $mediaData.media.track | Where-Object { $_.'@type' -eq 'Video' } | Select-Object -First 1
+            if ($videoTrack) {
+                if ($videoTrack.Format) { $info.VideoCodec = $videoTrack.Format }
+                if ($videoTrack.Width) { $info.Width = [int]$videoTrack.Width }
+                if ($videoTrack.Height) { $info.Height = [int]$videoTrack.Height }
+                if ($videoTrack.FrameRate) { $info.FrameRate = [double]$videoTrack.FrameRate }
+
+                # Check for HDR
+                $hdrFormat = $videoTrack.HDR_Format
+                $colorSpace = $videoTrack.colour_primaries
+                if ($hdrFormat -or $colorSpace -match 'BT.2020') {
+                    $info.HDR = $true
+                }
+            }
+
+            # Get Audio track info
+            $audioTrack = $mediaData.media.track | Where-Object { $_.'@type' -eq 'Audio' } | Select-Object -First 1
+            if ($audioTrack) {
+                if ($audioTrack.Format) { $info.AudioCodec = $audioTrack.Format }
+                if ($audioTrack.Channels) { $info.AudioChannels = [int]$audioTrack.Channels }
+            }
+        }
 
         # Determine resolution label
         if ($info.Height -ge 2160) { $info.Resolution = "2160p" }
@@ -725,11 +736,6 @@ function Get-MediaInfoDetails {
         elseif ($info.Height -ge 720) { $info.Resolution = "720p" }
         elseif ($info.Height -ge 480) { $info.Resolution = "480p" }
         elseif ($info.Height -gt 0) { $info.Resolution = "$($info.Height)p" }
-
-        # Check for HDR
-        if ($hdrFormat -or $colorSpace -match 'BT.2020') {
-            $info.HDR = $true
-        }
 
         Write-Verbose-Message "MediaInfo: $($info.Resolution) $($info.VideoCodec) $($info.AudioCodec)"
         return $info
@@ -1194,7 +1200,7 @@ function Export-LibraryToHTML {
     )
 
     if (-not $OutputPath) {
-        $OutputPath = Join-Path $PSScriptRoot "MediaLibrary_$(Get-Date -Format 'yyyyMMdd_HHmmss').html"
+        $OutputPath = Join-Path $script:ReportsFolder "MediaLibrary_$(Get-Date -Format 'yyyyMMdd_HHmmss').html"
     }
 
     Write-Host "`nGenerating HTML report..." -ForegroundColor Yellow
@@ -1214,7 +1220,13 @@ function Export-LibraryToHTML {
             $folders = Get-ChildItem -Path $Path -Directory -ErrorAction SilentlyContinue |
                 Where-Object { $_.Name -ne '_Trailers' }
 
+            $totalFolders = @($folders).Count
+            $currentIndex = 0
+
             foreach ($folder in $folders) {
+                $currentIndex++
+                Write-Host "`rScanning: $currentIndex / $totalFolders - $($folder.Name)".PadRight(80) -NoNewline
+
                 $videoFile = Get-ChildItem -Path $folder.FullName -File -ErrorAction SilentlyContinue |
                     Where-Object { $script:Config.VideoExtensions -contains $_.Extension.ToLower() } |
                     Sort-Object Length -Descending |
@@ -1251,6 +1263,7 @@ function Export-LibraryToHTML {
                     $stats.ByYear[$titleInfo.Year]++
                 }
             }
+            Write-Host "`rScanning complete: $totalFolders items processed".PadRight(80)
         }
 
         # Generate HTML
@@ -2366,6 +2379,313 @@ function Show-NFOMetadata {
     catch {
         Write-Host "Error scanning NFO files: $_" -ForegroundColor Red
         Write-Log "Error scanning NFO files: $_" "ERROR"
+    }
+}
+
+#============================================
+# FOLDER YEAR FIX FUNCTIONS
+#============================================
+
+<#
+.SYNOPSIS
+    Fixes missing years in movie folder names
+.PARAMETER Path
+    The root path to scan for movie folders
+.PARAMETER WhatIf
+    If true, only shows what would be changed without making changes
+.DESCRIPTION
+    Scans movie folders for missing years, looks up the year from:
+    1. Existing NFO file in the folder
+    2. TMDB API (confirms NFO year or finds missing year)
+    Then renames folders to "Movie Title (Year)" format and updates/creates NFO files.
+#>
+function Repair-MovieFolderYears {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$Path,
+        [switch]$WhatIf = $false
+    )
+
+    Write-Host "`n=== Fix Missing Years in Movie Folders ===" -ForegroundColor Cyan
+    if ($WhatIf) {
+        Write-Host "[DRY-RUN MODE - No changes will be made]" -ForegroundColor Yellow
+    }
+    Write-Log "Starting folder year fix in: $Path (WhatIf: $WhatIf)" "INFO"
+
+    if (-not $script:Config.TMDBApiKey) {
+        Write-Host "`nWarning: TMDB API key not configured. Only NFO files will be used for year lookup." -ForegroundColor Yellow
+        Write-Host "To enable TMDB lookups, add your API key to the config file." -ForegroundColor Yellow
+        $response = Read-Host "Continue anyway? (Y/N)"
+        if ($response -notmatch '^[Yy]') {
+            return
+        }
+    }
+
+    $folders = Get-ChildItem -Path $Path -Directory -ErrorAction SilentlyContinue
+    $foldersToFix = @()
+    $fixed = 0
+    $skipped = 0
+    $failed = 0
+    $noYearFound = @()
+
+    Write-Host "`nScanning folders..." -ForegroundColor Yellow
+
+    foreach ($folder in $folders) {
+        # Skip folders that already have a year
+        if ($folder.Name -match '\((19|20)\d{2}\)\s*$') {
+            continue
+        }
+
+        # Get the title from folder name (clean it up)
+        $titleInfo = Get-NormalizedTitle -Name $folder.Name
+        $cleanTitle = $titleInfo.NormalizedTitle
+
+        # Check for existing NFO file
+        $nfoFile = Get-ChildItem -Path $folder.FullName -Filter "*.nfo" -File -ErrorAction SilentlyContinue | Select-Object -First 1
+        $nfoYear = $null
+        $nfoMetadata = $null
+
+        if ($nfoFile) {
+            $nfoMetadata = Read-NFOFile -NfoPath $nfoFile.FullName
+            if ($nfoMetadata -and $nfoMetadata.Year) {
+                $nfoYear = $nfoMetadata.Year
+            }
+        }
+
+        # Search TMDB to confirm or find year
+        $tmdbResult = $null
+        $tmdbYear = $null
+
+        if ($script:Config.TMDBApiKey) {
+            # If we have NFO year, search with it for better accuracy
+            $tmdbResult = Search-TMDBMovie -Title $cleanTitle -Year $nfoYear -ApiKey $script:Config.TMDBApiKey
+            if ($tmdbResult) {
+                $tmdbYear = $tmdbResult.Year
+            }
+        }
+
+        # Determine final year to use
+        $finalYear = $null
+        $yearSource = $null
+
+        if ($nfoYear -and $tmdbYear) {
+            if ($nfoYear -eq $tmdbYear) {
+                $finalYear = $nfoYear
+                $yearSource = "NFO + TMDB (confirmed)"
+            } else {
+                # Prefer TMDB as it's authoritative, but note the discrepancy
+                $finalYear = $tmdbYear
+                $yearSource = "TMDB (NFO had $nfoYear)"
+            }
+        } elseif ($tmdbYear) {
+            $finalYear = $tmdbYear
+            $yearSource = "TMDB"
+        } elseif ($nfoYear) {
+            $finalYear = $nfoYear
+            $yearSource = "NFO only"
+        }
+
+        if ($finalYear) {
+            # Use TMDB title if available (preserves proper casing), otherwise use cleaned folder name
+            $displayTitle = if ($tmdbResult -and $tmdbResult.Title) { $tmdbResult.Title } else { $cleanTitle }
+
+            $foldersToFix += @{
+                Folder = $folder
+                CleanTitle = $displayTitle
+                Year = $finalYear
+                YearSource = $yearSource
+                NFOFile = $nfoFile
+                NFOMetadata = $nfoMetadata
+                TMDBResult = $tmdbResult
+            }
+        } else {
+            $noYearFound += @{
+                Folder = $folder
+                CleanTitle = $cleanTitle
+            }
+        }
+    }
+
+    # Display summary
+    Write-Host "`n=== Scan Results ===" -ForegroundColor Cyan
+    Write-Host "Folders to fix: $($foldersToFix.Count)" -ForegroundColor Green
+    Write-Host "No year found: $($noYearFound.Count)" -ForegroundColor Yellow
+
+    if ($noYearFound.Count -gt 0) {
+        Write-Host "`nFolders where no year could be determined:" -ForegroundColor Yellow
+        $noYearFound | Select-Object -First 10 | ForEach-Object {
+            Write-Host "  - $($_.Folder.Name)" -ForegroundColor Gray
+        }
+        if ($noYearFound.Count -gt 10) {
+            Write-Host "  ... and $($noYearFound.Count - 10) more" -ForegroundColor Gray
+        }
+    }
+
+    if ($foldersToFix.Count -eq 0) {
+        Write-Host "`nNo folders need fixing!" -ForegroundColor Green
+        return
+    }
+
+    # Show what will be changed
+    Write-Host "`n=== Proposed Changes ===" -ForegroundColor Cyan
+    foreach ($item in $foldersToFix) {
+        $newName = "$($item.CleanTitle) ($($item.Year))"
+        Write-Host "`n  Current: " -NoNewline -ForegroundColor Gray
+        Write-Host "$($item.Folder.Name)" -ForegroundColor White
+        Write-Host "  New:     " -NoNewline -ForegroundColor Gray
+        Write-Host "$newName" -ForegroundColor Green
+        Write-Host "  Source:  " -NoNewline -ForegroundColor Gray
+        Write-Host "$($item.YearSource)" -ForegroundColor Cyan
+    }
+
+    if ($WhatIf) {
+        Write-Host "`n[DRY-RUN] No changes made. Run without -WhatIf to apply changes." -ForegroundColor Yellow
+        Write-Log "Dry-run completed: $($foldersToFix.Count) folders would be fixed" "INFO"
+        return
+    }
+
+    # Confirm before proceeding
+    Write-Host ""
+    $confirm = Read-Host "Proceed with renaming $($foldersToFix.Count) folder(s)? (Y/N)"
+    if ($confirm -notmatch '^[Yy]') {
+        Write-Host "Operation cancelled." -ForegroundColor Yellow
+        return
+    }
+
+    # Apply changes
+    Write-Host "`nApplying changes..." -ForegroundColor Yellow
+
+    foreach ($item in $foldersToFix) {
+        $newName = "$($item.CleanTitle) ($($item.Year))"
+        $newPath = Join-Path (Split-Path $item.Folder.FullName -Parent) $newName
+
+        try {
+            # Check if target already exists
+            if (Test-Path $newPath) {
+                Write-Host "  Skipped (target exists): $($item.Folder.Name)" -ForegroundColor Yellow
+                $skipped++
+                continue
+            }
+
+            # Rename the folder
+            Rename-Item -Path $item.Folder.FullName -NewName $newName -ErrorAction Stop
+            Write-Host "  Renamed: $($item.Folder.Name) -> $newName" -ForegroundColor Green
+            Write-Log "Renamed folder: $($item.Folder.FullName) -> $newPath" "INFO"
+            $fixed++
+
+            # Update or create NFO file
+            $videoFile = Get-ChildItem -Path $newPath -File -ErrorAction SilentlyContinue |
+                         Where-Object { $script:Config.VideoExtensions -contains $_.Extension.ToLower() } |
+                         Select-Object -First 1
+
+            if ($videoFile) {
+                # Get full TMDB details if we have a result
+                $fullMetadata = $null
+                if ($item.TMDBResult -and $item.TMDBResult.TMDBID) {
+                    $fullMetadata = Get-TMDBMovieDetails -MovieId $item.TMDBResult.TMDBID -ApiKey $script:Config.TMDBApiKey
+                }
+
+                # Create/update NFO with best available data
+                $nfoPath = Join-Path $newPath "$([System.IO.Path]::GetFileNameWithoutExtension($videoFile.Name)).nfo"
+
+                if ($fullMetadata) {
+                    New-MovieNFOFromTMDB -Metadata $fullMetadata -NFOPath $nfoPath
+                } elseif (-not $item.NFOFile) {
+                    # Create basic NFO if none exists
+                    New-MovieNFO -VideoPath $videoFile.FullName -Title $item.CleanTitle -Year $item.Year
+                }
+            }
+        }
+        catch {
+            Write-Host "  Failed: $($item.Folder.Name) - $_" -ForegroundColor Red
+            Write-Log "Failed to rename folder $($item.Folder.FullName): $_" "ERROR"
+            $failed++
+        }
+    }
+
+    # Final summary
+    Write-Host "`n=== Summary ===" -ForegroundColor Cyan
+    Write-Host "Fixed: $fixed" -ForegroundColor Green
+    Write-Host "Skipped: $skipped" -ForegroundColor Yellow
+    Write-Host "Failed: $failed" -ForegroundColor $(if ($failed -gt 0) { 'Red' } else { 'Green' })
+    Write-Host "No year found: $($noYearFound.Count)" -ForegroundColor Yellow
+
+    Write-Log "Folder year fix completed: Fixed=$fixed, Skipped=$skipped, Failed=$failed, NoYear=$($noYearFound.Count)" "INFO"
+}
+
+<#
+.SYNOPSIS
+    Creates a Kodi-compatible NFO file from TMDB metadata
+.PARAMETER Metadata
+    Hashtable containing TMDB movie metadata
+.PARAMETER NFOPath
+    The path where the NFO file should be created
+#>
+function New-MovieNFOFromTMDB {
+    param(
+        [Parameter(Mandatory=$true)]
+        [hashtable]$Metadata,
+        [Parameter(Mandatory=$true)]
+        [string]$NFOPath
+    )
+
+    try {
+        $genresXml = ""
+        if ($Metadata.Genres) {
+            $genresXml = ($Metadata.Genres | ForEach-Object { "    <genre>$_</genre>" }) -join "`n"
+        }
+
+        $studiosXml = ""
+        if ($Metadata.Studios) {
+            $studiosXml = ($Metadata.Studios | Select-Object -First 3 | ForEach-Object { "    <studio>$_</studio>" }) -join "`n"
+        }
+
+        $directorsXml = ""
+        if ($Metadata.Directors) {
+            $directorsXml = ($Metadata.Directors | ForEach-Object { "    <director>$_</director>" }) -join "`n"
+        }
+
+        $actorsXml = ""
+        if ($Metadata.Actors) {
+            $actorsXml = ($Metadata.Actors | Select-Object -First 5 | ForEach-Object {
+                "    <actor>`n        <name>$($_.Name)</name>`n        <role>$($_.Role)</role>`n    </actor>"
+            }) -join "`n"
+        }
+
+        # Escape XML special characters in text content
+        $title = [System.Security.SecurityElement]::Escape($Metadata.Title)
+        $originalTitle = [System.Security.SecurityElement]::Escape($Metadata.OriginalTitle)
+        $plot = [System.Security.SecurityElement]::Escape($Metadata.Overview)
+        $tagline = [System.Security.SecurityElement]::Escape($Metadata.Tagline)
+
+        $nfoContent = @"
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<movie>
+    <title>$title</title>
+    <originaltitle>$originalTitle</originaltitle>
+    <year>$($Metadata.Year)</year>
+    <plot>$plot</plot>
+    <tagline>$tagline</tagline>
+    <runtime>$($Metadata.Runtime)</runtime>
+    <rating>$($Metadata.VoteAverage)</rating>
+    <votes>$($Metadata.VoteCount)</votes>
+    <uniqueid type="tmdb" default="true">$($Metadata.TMDBID)</uniqueid>
+    <uniqueid type="imdb">$($Metadata.IMDBID)</uniqueid>
+$genresXml
+$studiosXml
+$directorsXml
+$actorsXml
+</movie>
+"@
+
+        $nfoContent | Out-File -FilePath $NFOPath -Encoding UTF8 -Force
+        Write-Host "  Created NFO: $(Split-Path $NFOPath -Leaf)" -ForegroundColor Cyan
+        Write-Log "Created NFO from TMDB: $NFOPath" "INFO"
+        $script:Stats.NFOFilesCreated++
+    }
+    catch {
+        Write-Host "  Error creating NFO: $_" -ForegroundColor Red
+        Write-Log "Error creating NFO from TMDB: $_" "ERROR"
     }
 }
 
@@ -3618,7 +3938,10 @@ function New-TranscodeScript {
 `$files = @(
 "@
 
+    $itemCount = $TranscodeQueue.Count
+    $currentIndex = 0
     foreach ($item in $TranscodeQueue) {
+        $currentIndex++
         # Output goes to same folder as input, with .mkv extension
         $inputDir = [System.IO.Path]::GetDirectoryName($item.Path)
         $baseName = [System.IO.Path]::GetFileNameWithoutExtension($item.FileName)
@@ -3627,7 +3950,9 @@ function New-TranscodeScript {
         # Escape single quotes by doubling them for PowerShell string literals
         $escapedInput = $item.Path -replace "'", "''"
         $escapedOutput = $outputFile -replace "'", "''"
-        $scriptContent += "`n    @{ Input = '$escapedInput'; Output = '$escapedOutput'; Mode = '$mode' },"
+        # Only add comma if not the last item
+        $comma = if ($currentIndex -lt $itemCount) { "," } else { "" }
+        $scriptContent += "`n    @{ Input = '$escapedInput'; Output = '$escapedOutput'; Mode = '$mode' }$comma"
     }
 
     $resolutionParam = if ($TargetResolution) { "-vf scale=$TargetResolution" } else { "" }
@@ -5061,6 +5386,7 @@ Write-Host "6. Export Library Report"
 Write-Host "7. Enhanced Duplicate Scan"
 Write-Host "8. Undo Previous Session"
 Write-Host "9. Save/Load Configuration"
+Write-Host "10. Fix Missing Folder Years"
 
 $type = Read-Host "`nSelect option"
 Write-Log "User selected type: $type" "INFO"
@@ -5276,7 +5602,7 @@ switch ($type) {
             }
             "3" {
                 $script:Config = $script:DefaultConfig.Clone()
-                $script:Config.LogFile = Join-Path $PSScriptRoot "MediaCleaner_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
+                $script:Config.LogFile = Join-Path $script:LogsFolder "MediaCleaner_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
                 Write-Host "Configuration reset to defaults" -ForegroundColor Green
             }
             "4" {
@@ -5285,6 +5611,41 @@ switch ($type) {
                     $value = if ($_.Value -is [array]) { $_.Value -join ', ' } else { $_.Value }
                     Write-Host "  $($_.Key): $value" -ForegroundColor White
                 }
+            }
+        }
+    }
+    "10" {
+        # Fix Missing Folder Years
+        Write-Host "`n=== Fix Missing Folder Years ===" -ForegroundColor Cyan
+        Write-Host "This will scan movie folders for missing years and add them using TMDB."
+        Write-Host ""
+
+        # Check TMDB API key
+        if (-not $script:Config.TMDBApiKey) {
+            Write-Host "TMDB API key not configured!" -ForegroundColor Yellow
+            $apiKey = Read-Host "Enter your TMDB API key (or press Enter to skip TMDB lookups)"
+            if ($apiKey) {
+                $script:Config.TMDBApiKey = $apiKey
+                Write-Host "API key set for this session" -ForegroundColor Green
+
+                $saveKey = Read-Host "Save API key to config file? (Y/N) [Y]"
+                if ($saveKey -notmatch '^[Nn]') {
+                    Export-Configuration
+                }
+            }
+        } else {
+            Write-Host "TMDB API key: configured" -ForegroundColor Green
+        }
+
+        $dryRunInput = Read-Host "`nRun in dry-run mode first? (Y/N) [Y]"
+        $dryRun = $dryRunInput -notmatch '^[Nn]'
+
+        $path = Select-FolderDialog -Description "Select your Movies folder"
+        if ($path) {
+            if ($dryRun) {
+                Repair-MovieFolderYears -Path $path -WhatIf
+            } else {
+                Repair-MovieFolderYears -Path $path
             }
         }
     }
