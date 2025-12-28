@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(pwsh:*)"
+      "Bash(pwsh:*)",
+      "Bash(FILTER_BRANCH_SQUELCH_WARNING=1 git filter-branch:*)",
+      "Bash(git stash:*)"
     ]
   }
 }
