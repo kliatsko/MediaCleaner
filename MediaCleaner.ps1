@@ -91,7 +91,8 @@
 # Script parameters for command-line usage
 param(
     [string]$ConfigFile = $null,
-    [switch]$Verbose
+    [switch]$Verbose,
+    [switch]$NoAutoOpen  # Disable auto-opening reports in dry run mode
 )
 
 # Verbose mode flag
@@ -306,6 +307,11 @@ $script:UndoManifest = @{
 # Failed operations queue for retry
 $script:FailedOperations = @()
 
+# Track processed path for dry run report
+$script:ProcessedPath = $null
+$script:ProcessedMediaType = $null
+$script:NoAutoOpen = $NoAutoOpen.IsPresent
+
 #============================================
 # HELPER FUNCTIONS
 #============================================
@@ -330,6 +336,32 @@ function Write-Log {
     # Track errors and warnings in stats
     if ($Level -eq "ERROR") { $script:Stats.Errors++ }
     if ($Level -eq "WARNING") { $script:Stats.Warnings++ }
+}
+
+<#
+.SYNOPSIS
+    Sanitizes a string for use as a Windows filename/folder name
+.DESCRIPTION
+    Replaces characters that are illegal in Windows filenames with a hyphen.
+    Illegal characters: \ / : * ? " < > |
+.PARAMETER Name
+    The string to sanitize
+.OUTPUTS
+    A string safe for use as a Windows filename
+#>
+function Get-SafeFileName {
+    param([string]$Name)
+
+    # Replace illegal Windows filename characters with hyphen
+    $safe = $Name -replace '[\\/:*?"<>|]', '-'
+
+    # Collapse multiple consecutive hyphens into one
+    $safe = $safe -replace '-+', '-'
+
+    # Remove leading/trailing hyphens and spaces
+    $safe = $safe.Trim('-', ' ')
+
+    return $safe
 }
 
 #============================================
@@ -1557,6 +1589,190 @@ function Invoke-ExportMenu {
 
 <#
 .SYNOPSIS
+    Generates and optionally auto-opens a dry run summary report
+.DESCRIPTION
+    Creates an HTML report summarizing all changes that would be made in dry run mode.
+    Automatically opens in the default browser unless -NoAutoOpen was specified.
+.PARAMETER Path
+    The path that was processed
+.PARAMETER MediaType
+    Type of media (Movies or TVShows)
+#>
+function Export-DryRunReport {
+    param(
+        [string]$Path,
+        [string]$MediaType = "Movies"
+    )
+
+    if (-not $Path) {
+        Write-Verbose-Message "No path provided for dry run report"
+        return $null
+    }
+
+    $reportPath = Join-Path $script:ReportsFolder "DryRun_$(Get-Date -Format 'yyyyMMdd_HHmmss').html"
+
+    Write-Host "`nGenerating dry run report..." -ForegroundColor Yellow
+    Write-Log "Generating dry run report for: $Path" "INFO"
+
+    try {
+        # Read the log file to extract DRY-RUN entries
+        $logContent = @()
+        if (Test-Path $script:Config.LogFile) {
+            $logContent = Get-Content -Path $script:Config.LogFile -ErrorAction SilentlyContinue |
+                Where-Object { $_ -match '\[DRY-RUN\]' }
+        }
+
+        $duration = if ($script:Stats.EndTime -and $script:Stats.StartTime) {
+            $script:Stats.EndTime - $script:Stats.StartTime
+        } else {
+            (Get-Date) - $script:Stats.StartTime
+        }
+
+        # Build action summary from log entries
+        $actions = @{
+            Deletions = @($logContent | Where-Object { $_ -match 'Would delete' })
+            Moves = @($logContent | Where-Object { $_ -match 'Would move' })
+            Renames = @($logContent | Where-Object { $_ -match 'Would rename' })
+            Creates = @($logContent | Where-Object { $_ -match 'Would create' })
+            Extractions = @($logContent | Where-Object { $_ -match 'Would extract' })
+        }
+
+        $html = @"
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MediaCleaner Dry Run Report</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', Tahoma, sans-serif; background: #1a1a2e; color: #eee; padding: 20px; }
+        h1 { color: #ffaa00; margin-bottom: 10px; text-align: center; }
+        h2 { color: #00d4ff; margin: 20px 0 10px; border-bottom: 2px solid #00d4ff; padding-bottom: 5px; }
+        .warning-banner { background: #664400; border: 2px solid #ffaa00; border-radius: 10px; padding: 15px; margin-bottom: 20px; text-align: center; }
+        .warning-banner h2 { color: #ffaa00; border: none; margin: 0; }
+        .warning-banner p { color: #ffcc66; margin-top: 5px; }
+        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px; margin-bottom: 30px; }
+        .stat-card { background: #16213e; padding: 15px; border-radius: 10px; text-align: center; }
+        .stat-value { font-size: 2em; color: #00d4ff; font-weight: bold; }
+        .stat-label { color: #888; margin-top: 5px; font-size: 0.9em; }
+        .action-section { background: #16213e; padding: 15px; border-radius: 10px; margin-bottom: 15px; }
+        .action-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+        .action-count { background: #0f3460; padding: 5px 15px; border-radius: 20px; font-size: 0.9em; }
+        .action-list { max-height: 300px; overflow-y: auto; }
+        .action-item { padding: 8px 12px; border-bottom: 1px solid #0f3460; font-family: 'Consolas', monospace; font-size: 0.85em; word-break: break-all; }
+        .action-item:last-child { border-bottom: none; }
+        .action-item:hover { background: #1f4068; }
+        .delete { border-left: 3px solid #ff4444; }
+        .move { border-left: 3px solid #44aaff; }
+        .rename { border-left: 3px solid #44ff88; }
+        .create { border-left: 3px solid #aa44ff; }
+        .extract { border-left: 3px solid #ffaa44; }
+        .empty-message { color: #666; font-style: italic; padding: 10px; }
+        .footer { text-align: center; margin-top: 30px; color: #666; font-size: 0.9em; }
+        .path-info { background: #0f3460; padding: 10px 15px; border-radius: 8px; margin-bottom: 20px; font-family: 'Consolas', monospace; word-break: break-all; }
+    </style>
+</head>
+<body>
+    <h1>🔍 Dry Run Report</h1>
+    <div class="warning-banner">
+        <h2>⚠️ PREVIEW ONLY - NO CHANGES MADE</h2>
+        <p>This report shows what would happen if you run MediaCleaner in live mode.</p>
+    </div>
+
+    <div class="path-info">
+        <strong>Scanned Path:</strong> $([System.Web.HttpUtility]::HtmlEncode($Path))<br>
+        <strong>Media Type:</strong> $MediaType<br>
+        <strong>Scan Duration:</strong> $("{0:hh\:mm\:ss}" -f $duration)
+    </div>
+
+    <div class="stats-grid">
+        <div class="stat-card">
+            <div class="stat-value">$($actions.Deletions.Count)</div>
+            <div class="stat-label">Files to Delete</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value">$($actions.Moves.Count)</div>
+            <div class="stat-label">Files to Move</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value">$($actions.Renames.Count)</div>
+            <div class="stat-label">Items to Rename</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value">$($actions.Creates.Count)</div>
+            <div class="stat-label">Items to Create</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value">$($actions.Extractions.Count)</div>
+            <div class="stat-label">Archives to Extract</div>
+        </div>
+    </div>
+"@
+
+        # Add action sections
+        $sectionData = @(
+            @{ Title = "Files to Delete"; Items = $actions.Deletions; Class = "delete"; Icon = "🗑️" }
+            @{ Title = "Files to Move"; Items = $actions.Moves; Class = "move"; Icon = "📦" }
+            @{ Title = "Items to Rename"; Items = $actions.Renames; Class = "rename"; Icon = "✏️" }
+            @{ Title = "Items to Create"; Items = $actions.Creates; Class = "create"; Icon = "📁" }
+            @{ Title = "Archives to Extract"; Items = $actions.Extractions; Class = "extract"; Icon = "📂" }
+        )
+
+        foreach ($section in $sectionData) {
+            $html += @"
+    <div class="action-section">
+        <div class="action-header">
+            <h2>$($section.Icon) $($section.Title)</h2>
+            <span class="action-count">$($section.Items.Count) items</span>
+        </div>
+        <div class="action-list">
+"@
+            if ($section.Items.Count -eq 0) {
+                $html += "            <div class='empty-message'>No actions in this category</div>`n"
+            } else {
+                foreach ($item in $section.Items) {
+                    # Extract the relevant part of the log entry
+                    $cleanItem = $item -replace '^\[.*?\] \[DRY-RUN\] ', ''
+                    $html += "            <div class='action-item $($section.Class)'>$([System.Web.HttpUtility]::HtmlEncode($cleanItem))</div>`n"
+                }
+            }
+            $html += @"
+        </div>
+    </div>
+"@
+        }
+
+        $html += @"
+    <div class="footer">
+        <p>Generated by MediaCleaner v4.1 | $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')</p>
+        <p style="margin-top: 10px;">To apply these changes, run MediaCleaner again and select <strong>No</strong> for dry-run mode.</p>
+    </div>
+</body>
+</html>
+"@
+
+        $html | Out-File -FilePath $reportPath -Encoding UTF8
+        Write-Host "Dry run report generated: $reportPath" -ForegroundColor Green
+        Write-Log "Dry run report generated: $reportPath" "INFO"
+
+        # Auto-open unless disabled
+        if (-not $script:NoAutoOpen) {
+            Write-Host "Opening report in browser..." -ForegroundColor Cyan
+            Start-Process $reportPath
+        }
+
+        return $reportPath
+    }
+    catch {
+        Write-Host "Error generating dry run report: $_" -ForegroundColor Red
+        Write-Log "Error generating dry run report: $_" "ERROR"
+        return $null
+    }
+}
+
+<#
+.SYNOPSIS
     Displays a folder browser dialog for user to select a directory
 .OUTPUTS
     String - The full path of the selected folder
@@ -2092,7 +2308,7 @@ function Read-NFOFile {
             return $null
         }
 
-        [xml]$nfoContent = Get-Content -Path $NfoPath -Encoding UTF8 -ErrorAction Stop
+        [xml]$nfoContent = Get-Content -Path $NfoPath -Raw -Encoding UTF8 -ErrorAction Stop
         $script:Stats.NFOFilesRead++
 
         # Movie NFO
@@ -2529,7 +2745,8 @@ function Repair-MovieFolderYears {
     # Show what will be changed
     Write-Host "`n=== Proposed Changes ===" -ForegroundColor Cyan
     foreach ($item in $foldersToFix) {
-        $newName = "$($item.CleanTitle) ($($item.Year))"
+        $safeTitle = Get-SafeFileName -Name $item.CleanTitle
+        $newName = "$safeTitle ($($item.Year))"
         Write-Host "`n  Current: " -NoNewline -ForegroundColor Gray
         Write-Host "$($item.Folder.Name)" -ForegroundColor White
         Write-Host "  New:     " -NoNewline -ForegroundColor Gray
@@ -2556,7 +2773,9 @@ function Repair-MovieFolderYears {
     Write-Host "`nApplying changes..." -ForegroundColor Yellow
 
     foreach ($item in $foldersToFix) {
-        $newName = "$($item.CleanTitle) ($($item.Year))"
+        # Sanitize title for Windows filename (replace illegal characters like : / \ etc.)
+        $safeTitle = Get-SafeFileName -Name $item.CleanTitle
+        $newName = "$safeTitle ($($item.Year))"
         $newPath = Join-Path (Split-Path $item.Folder.FullName -Parent) $newName
 
         try {
@@ -5409,6 +5628,10 @@ switch ($type) {
 
         $path = Select-FolderDialog -Description "Select your Movies folder"
         if ($path) {
+            # Track path for dry run report
+            $script:ProcessedPath = $path
+            $script:ProcessedMediaType = "Movies"
+
             Invoke-MovieProcessing -Path $path
 
             # Retry failed operations
@@ -5417,10 +5640,15 @@ switch ($type) {
             # Save undo manifest
             Save-UndoManifest
 
-            # Offer to export report
-            $exportReport = Read-Host "`nExport library report? (Y/N) [N]"
-            if ($exportReport -eq 'Y' -or $exportReport -eq 'y') {
-                Invoke-ExportMenu -Path $path -MediaType "Movies"
+            # Generate dry run report if in dry run mode
+            if ($script:Config.DryRun) {
+                Export-DryRunReport -Path $path -MediaType "Movies"
+            } else {
+                # Offer to export report (only in live mode)
+                $exportReport = Read-Host "`nExport library report? (Y/N) [N]"
+                if ($exportReport -eq 'Y' -or $exportReport -eq 'y') {
+                    Invoke-ExportMenu -Path $path -MediaType "Movies"
+                }
             }
 
             # Offer to save config
@@ -5453,6 +5681,10 @@ switch ($type) {
 
         $path = Select-FolderDialog -Description "Select your TV Shows folder"
         if ($path) {
+            # Track path for dry run report
+            $script:ProcessedPath = $path
+            $script:ProcessedMediaType = "TVShows"
+
             Invoke-TVShowProcessing -Path $path
 
             # Retry failed operations
@@ -5460,6 +5692,11 @@ switch ($type) {
 
             # Save undo manifest
             Save-UndoManifest
+
+            # Generate dry run report if in dry run mode
+            if ($script:Config.DryRun) {
+                Export-DryRunReport -Path $path -MediaType "TVShows"
+            }
 
             # Offer to save config
             Invoke-ConfigurationSavePrompt
