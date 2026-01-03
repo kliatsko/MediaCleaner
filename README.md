@@ -5,7 +5,7 @@ A linter for your media library. LibraryLint is a PowerShell tool for media libr
 ![PowerShell](https://img.shields.io/badge/PowerShell-5.1+-blue.svg)
 ![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)
 ![Windows](https://img.shields.io/badge/Windows-10+-green.svg)
-![Version](https://img.shields.io/badge/Version-4.1-orange.svg)
+![Version](https://img.shields.io/badge/Version-5.0-orange.svg)
 
 ## Features
 
