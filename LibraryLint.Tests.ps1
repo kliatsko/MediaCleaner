@@ -2,10 +2,10 @@
 
 <#
 .SYNOPSIS
-    Pester unit tests for MediaCleaner.ps1
+    Pester unit tests for LibraryLint.ps1
 
 .DESCRIPTION
-    Comprehensive test suite for MediaCleaner functionality including:
+    Comprehensive test suite for LibraryLint functionality including:
     - Quality scoring
     - Episode parsing
     - Title normalization
@@ -14,7 +14,7 @@
     - File operations (mocked)
 
 .NOTES
-    Run with: Invoke-Pester -Path .\MediaCleaner.Tests.ps1 -Output Detailed
+    Run with: Invoke-Pester -Path .\LibraryLint.Tests.ps1 -Output Detailed
 #>
 
 BeforeAll {
@@ -22,7 +22,7 @@ BeforeAll {
     # We need to extract just the functions, not execute the main script
 
     # Get the script content and extract function definitions
-    $scriptPath = Join-Path $PSScriptRoot "MediaCleaner.ps1"
+    $scriptPath = Join-Path $PSScriptRoot "LibraryLint.ps1"
     $scriptContent = Get-Content $scriptPath -Raw
 
     # Initialize config for tests

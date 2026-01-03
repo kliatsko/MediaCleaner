@@ -1,8 +1,9 @@
-# MediaCleaner
+# LibraryLint
 
-A PowerShell tool for media library organization and cleanup. Designed for managing movie and TV show collections with support for Kodi/Plex-compatible naming and metadata.
+A linter for your media library. LibraryLint is a PowerShell tool for media library organization and cleanup. Designed for managing movie and TV show collections with support for Kodi/Plex/Jellyfin-compatible naming and metadata.
 
 ![PowerShell](https://img.shields.io/badge/PowerShell-5.1+-blue.svg)
+![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)
 ![Windows](https://img.shields.io/badge/Windows-10+-green.svg)
 ![Version](https://img.shields.io/badge/Version-4.1-orange.svg)
 
@@ -54,12 +55,12 @@ A PowerShell tool for media library organization and cleanup. Designed for manag
 
 1. Clone the repository:
    ```powershell
-   git clone https://github.com/nklia/MediaCleaner.git
+   git clone https://github.com/kliatsko/librarylint.git
    ```
 
 2. Run the script:
    ```powershell
-   .\MediaCleaner.ps1
+   .\LibraryLint.ps1
    ```
 
 ## Usage
@@ -67,17 +68,17 @@ A PowerShell tool for media library organization and cleanup. Designed for manag
 ### Interactive Mode
 Simply run the script and follow the prompts:
 ```powershell
-.\MediaCleaner.ps1
+.\LibraryLint.ps1
 ```
 
 ### With Verbose Output
 ```powershell
-.\MediaCleaner.ps1 -Verbose
+.\LibraryLint.ps1 -Verbose
 ```
 
 ### With Custom Config File
 ```powershell
-.\MediaCleaner.ps1 -ConfigFile "C:\path\to\config.json"
+.\LibraryLint.ps1 -ConfigFile "C:\path\to\config.json"
 ```
 
 ## Main Menu Options
@@ -107,7 +108,7 @@ Simply run the script and follow the prompts:
 
 ## Configuration
 
-Settings are stored in `%LOCALAPPDATA%\MediaCleaner\MediaCleaner.config.json`
+Settings are stored in `%LOCALAPPDATA%\LibraryLint\LibraryLint.config.json`
 
 Key configuration options:
 - `DryRun` - Preview mode (no changes made)
@@ -123,9 +124,9 @@ Key configuration options:
 
 | File Type | Location |
 |-----------|----------|
-| Logs | `%LOCALAPPDATA%\MediaCleaner\Logs\` |
-| Config | `%LOCALAPPDATA%\MediaCleaner\MediaCleaner.config.json` |
-| Undo Manifests | `%LOCALAPPDATA%\MediaCleaner\Undo\` |
+| Logs | `%LOCALAPPDATA%\LibraryLint\Logs\` |
+| Config | `%LOCALAPPDATA%\LibraryLint\LibraryLint.config.json` |
+| Undo Manifests | `%LOCALAPPDATA%\LibraryLint\Undo\` |
 
 ## Quality Scoring
 

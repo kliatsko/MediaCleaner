@@ -1,12 +1,12 @@
-# MediaCleaner - AI Coding Agent Instructions
+# LibraryLint - AI Coding Agent Instructions
 
 ## Project Overview
-MediaCleaner is a Windows PowerShell utility that automates media library cleanup for downloaded movies and TV shows. The single script (`MediaCleaner.ps1`) handles file organization, archive extraction, naming normalization, and metadata removal.
+LibraryLint is a Windows PowerShell utility that automates media library cleanup for downloaded movies and TV shows. The single script (`LibraryLint.ps1`) handles file organization, archive extraction, naming normalization, and metadata removal.
 
 ## Architecture & Core Patterns
 
 ### Single-Script Architecture
-- **File**: `MediaCleaner.ps1` (184 lines)
+- **File**: `LibraryLint.ps1`
 - All functionality consolidates into one entry point with conditional branches for movies vs. shows
 - Uses interactive user selection (FolderBrowserDialog) to determine target path and media type
 
@@ -70,7 +70,7 @@ MediaCleaner is a Windows PowerShell utility that automates media library cleanu
 
 ### Testing Locally
 - Create a test folder with mock media files/folders
-- Run: `powershell -ExecutionPolicy Bypass -File MediaCleaner.ps1`
+- Run: `powershell -ExecutionPolicy Bypass -File LibraryLint.ps1`
 - Verify folder structure matches expected output before modifying cleanup logic
 
 ## Known Limitations & TODOs
@@ -81,6 +81,6 @@ MediaCleaner is a Windows PowerShell utility that automates media library cleanu
 - Assumes single-level folder structure for movies (not deeply nested)
 
 ## File Modification Guidelines
-- **MovieCleaner.ps1** is the only code file; all changes consolidate here
+- **LibraryLint.ps1** is the main PowerShell code file
 - **README.md**: Update requirements if dependencies change
 - **LICENSE**: Preserve copyright attribution (created by Nick Kliatsko, last updated 12/22/2024)
